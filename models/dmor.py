@@ -31,22 +31,24 @@ class DMOR(nn.Module):
         # Spatial routing
         self.spatial_router = nn.Conv2d(channels, num_ops, 1)
 
-    def forward(self, x):
-        B, C, H, W = x.shape
-        op_feats = torch.stack([op(x) for op in self.ops], dim=1)  # [B, N, C, H, W]
+    def forward(self, x, return_weights: bool = False):
+    B, C, H, W = x.shape
+    op_feats = torch.stack([op(x) for op in self.ops], dim=1)  # [B, N, C, H, W]
 
-        # Routing weights
-        w_global = self.global_router(x).view(B, -1, 1, 1)
-        w_spatial = self.spatial_router(x)
+    # Routing weights
+    w_global = self.global_router(x).view(B, -1, 1, 1)
+    w_spatial = self.spatial_router(x)
+    weights = torch.softmax(w_global + w_spatial, dim=1)
 
-        weights = torch.softmax(w_global + w_spatial, dim=1)
+    # Top-K sparse routing
+    if self.topk < weights.shape[1]:
+        topk_vals, topk_idx = torch.topk(weights, self.topk, dim=1)
+        mask = torch.zeros_like(weights).scatter_(1, topk_idx, 1.0)
+        weights = weights * mask
+        weights = weights / (weights.sum(dim=1, keepdim=True) + 1e-6)
 
-        # Top-K sparse routing
-        if self.topk < weights.shape[1]:
-            topk_vals, topk_idx = torch.topk(weights, self.topk, dim=1)
-            mask = torch.zeros_like(weights).scatter_(1, topk_idx, 1.0)
-            weights = weights * mask
-            weights = weights / (weights.sum(dim=1, keepdim=True) + 1e-6)
+    out = (weights.unsqueeze(2) * op_feats).sum(dim=1)
 
-        out = (weights.unsqueeze(2) * op_feats).sum(dim=1)
-        return out
+    if return_weights:
+        return out, weights
+    return out
