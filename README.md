@@ -70,6 +70,29 @@ architectures, DMOR-Edge adaptively selects complementary edge operators
 according to global image context and spatial location, improving boundary
 localization while suppressing texture noise.
 
+---
+
+## Quick Start
+
+## Quick Start
+
+```python
+import torch
+from models import DMOR
+
+# Dummy input feature map
+x = torch.randn(2, 32, 128, 128)
+
+# Initialize DMOR module
+dmor = DMOR(channels=32, topk=2)
+
+# Forward pass
+y = dmor(x)
+print(y.shape)  # Expected: [2, 32, 128, 128]
+```
+
+---
+
 ## Method
 DMOR-Edge constructs an operator pool consisting of complementary edge-aware
 operators, including learnable difference, center-difference convolution,
