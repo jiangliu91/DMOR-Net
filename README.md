@@ -4,7 +4,68 @@ Dynamic Modulated Operator Router for Lightweight Edge Detection
 
 ## Abstract
 We propose DMOR-Edge, a lightweight edge detection framework that performs
-dynamic operator routing in operator space. Instead of fixed multi-branch
+dynamic operator rou# DMOR-Edge
+
+Dynamic Modulated Operator Router for Lightweight Edge Detection
+
+---
+
+## Overview
+DMOR-Edge is a lightweight edge detection framework that performs **dynamic operator routing
+in operator space**. Instead of relying on fixed multi-branch architectures, DMOR-Edge
+adaptively selects complementary edge operators conditioned on **global image context**
+and **spatial location**, improving boundary localization while effectively suppressing
+texture-induced false edges.
+
+---
+
+## Method
+
+### Operator Pool (O1–O5)
+We construct a pool of complementary edge-aware operators, each encoding a distinct
+inductive bias:
+
+- **O1: Learnable Difference Operator**  
+  Enhances local intensity variations and sharp transitions.
+
+- **O2: Center-Difference Convolution (CDC)**  
+  Strengthens edge response while maintaining parameter efficiency.
+
+- **O3: Direction-Aware Operator (1×3 + 3×1)**  
+  Captures horizontal and vertical edge structures with strong orientation sensitivity.
+
+- **O4: Lightweight Multi-scale Context Operator**  
+  Expands receptive fields using dilated convolution for weak and long-range boundaries.
+
+- **O5: Edge-Preserving Smoothing Operator**  
+  Suppresses texture noise while preserving structural edges.
+
+---
+
+### Dynamic Modulated Operator Router (DMOR)
+Given the operator pool, a **Dynamic Modulated Operator Router (DMOR)** is introduced to
+adaptively aggregate operator responses:
+
+- **Global Routing**  
+  Learns image-level operator preferences via global context encoding.
+
+- **Spatial Routing**  
+  Produces pixel-wise routing weights for location-aware operator selection.
+
+- **Top-K Sparse Routing**  
+  Activates only the most relevant operators to improve efficiency and interpretability.
+
+The final output is obtained as a weighted summation of selected operator responses.
+
+---
+
+## Code Structure
+
+DMOR-Edge performs dynamic routing in operator space. Instead of fixed multi-branch
+architectures, DMOR-Edge adaptively selects complementary edge operators
+according to global image context and spatial location, improving boundary
+localization while suppressing texture noise.
+
 architectures, DMOR-Edge adaptively selects complementary edge operators
 according to global image context and spatial location, improving boundary
 localization while suppressing texture noise.
