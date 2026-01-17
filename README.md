@@ -74,8 +74,6 @@ localization while suppressing texture noise.
 
 ## Quick Start
 
-## Quick Start
-
 ```python
 import torch
 from models import DMOR
