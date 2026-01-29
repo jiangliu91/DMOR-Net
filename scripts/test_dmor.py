@@ -1,6 +1,9 @@
+import os, sys
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+
 import torch
-import torch.nn.functional as F
 from models.dmor import DMOR
+
 
 def balanced_bce(pred, gt):
     pos = gt.sum().clamp_min(1.0)
