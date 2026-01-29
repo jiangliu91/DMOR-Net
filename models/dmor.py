@@ -36,20 +36,24 @@ class DMOR(nn.Module):
     """
     DMOR block:
       - operator pool O1-O5
-      - global + spatial routers
+      - global + spatial routers (optional)
       - softmax across operator dimension
       - optional top-k sparse routing
+      - router_mode:
+          * "dmor": learned routing (original)
+          * "uniform": no-router baseline (equal weights)
     """
-    def __init__(self, channels: int = 32, topk: int = 0):
+    def __init__(self, channels: int = 32, topk: int = 0, router_mode: str = "dmor"):
         super().__init__()
         self.channels = int(channels)
         self.topk = int(topk)
+        self.router_mode = str(router_mode)
 
         # Operators
         self.ops = build_operator_pool(self.channels)
         self.num_ops = len(self.ops)
 
-        # Routers
+        # Routers (only used when router_mode == "dmor")
         self.global_router = GlobalRouter(self.channels, self.num_ops)
         self.spatial_router = SpatialRouter(self.channels, self.num_ops)
 
@@ -65,23 +69,29 @@ class DMOR(nn.Module):
         # Operator responses: [B, N, C, H, W]
         op_feats = torch.stack([op(x) for op in self.ops], dim=1)
 
-        # Routing logits
-        w_global = self.global_router(x).view(B, self.num_ops, 1, 1)  # [B, N, 1, 1]
-        w_spatial = self.spatial_router(x)                            # [B, N, H, W]
+        # ===== No-Router baseline =====
+        if self.router_mode == "uniform":
+            # Equal weights across operators, no top-k (topk is meaningless here)
+            weights = op_feats.new_full((B, self.num_ops, H, W), 1.0 / float(self.num_ops))
+        else:
+            # ===== Original DMOR learned routing =====
+            # Routing logits
+            w_global = self.global_router(x).view(B, self.num_ops, 1, 1)  # [B, N, 1, 1]
+            w_spatial = self.spatial_router(x)                            # [B, N, H, W]
 
-        # Normalized weights
-        weights = torch.softmax(w_global + w_spatial, dim=1)          # [B, N, H, W]
+            # Normalized weights
+            weights = torch.softmax(w_global + w_spatial, dim=1)          # [B, N, H, W]
 
-        # Top-K sparse routing (optional)
-        if self.topk > 0 and self.topk < self.num_ops:
-            _, idx = torch.topk(weights, self.topk, dim=1)
-            mask = torch.zeros_like(weights)
-            mask.scatter_(1, idx, 1.0)
-            weights = weights * mask
-            weights = weights / (weights.sum(dim=1, keepdim=True) + 1e-6)
+            # Top-K sparse routing (optional)
+            if self.topk > 0 and self.topk < self.num_ops:
+                _, idx = torch.topk(weights, self.topk, dim=1)
+                mask = torch.zeros_like(weights)
+                mask.scatter_(1, idx, 1.0)
+                weights = weights * mask
+                weights = weights / (weights.sum(dim=1, keepdim=True) + 1e-6)
 
         # Weighted sum over operators
-        out = (weights.unsqueeze(2) * op_feats).sum(dim=1)            # [B, C, H, W]
+        out = (weights.unsqueeze(2) * op_feats).sum(dim=1)  # [B, C, H, W]
 
         if return_weights:
             return out, weights

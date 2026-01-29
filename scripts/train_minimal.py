@@ -43,28 +43,42 @@ def balanced_bce_with_logits(logits, gt):
 
 
 @torch.no_grad()
-def routing_stats(weights: torch.Tensor):
+def routing_stats(weights: torch.Tensor, topk: int):
     """
-    weights: [B, N, H, W] softmaxed routing weights (after topk masking if enabled)
-    Return: (entropy_mean, top1_ratio_per_op)
+    weights: [B, N, H, W] routing weights (after topk masking if enabled)
+    topk:
+      - 0 means dense
+      - K>0 means sparse top-k
+    Return:
+      - entropy_mean
+      - winner_ratio_per_op (Top-1)
+      - topk_membership_ratio_per_op (true Top-K; dense uses N)
     """
     eps = 1e-9
-    # entropy over operator dimension
     p = weights.clamp_min(eps)
+
     ent = -(p * p.log()).sum(dim=1)  # [B,H,W]
     ent_mean = ent.mean().item()
 
-    # top-1 chosen operator index frequency
-    top1 = weights.argmax(dim=1)  # [B,H,W]
-    N = weights.shape[1]
+    top1 = p.argmax(dim=1)  # [B,H,W]
+    N = p.shape[1]
     counts = torch.bincount(top1.flatten(), minlength=N).float()
-    ratio = (counts / counts.sum().clamp_min(1.0)).cpu().tolist()
-    return ent_mean, ratio
+    winner_ratio = (counts / counts.sum().clamp_min(1.0)).cpu().tolist()
+
+    effective_k = N if topk == 0 else topk
+    topk_idx = torch.topk(p, k=effective_k, dim=1).indices  # [B,K,H,W]
+    mem_counts = torch.bincount(topk_idx.flatten(), minlength=N).float()
+    denom = mem_counts.sum().clamp_min(1.0)
+    topk_ratio = (mem_counts / denom).cpu().tolist()
+
+    return ent_mean, winner_ratio, topk_ratio
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--topk", type=int, default=0, help="0=dense, K=sparse top-k")
+    parser.add_argument("--router", type=str, default="dmor", choices=["dmor", "uniform"],
+                        help="dmor=learned routing, uniform=no-router equal fusion")
+    parser.add_argument("--topk", type=int, default=0, help="0=dense, K=sparse top-k (only for router=dmor)")
     parser.add_argument("--iters", type=int, default=50)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--batch", type=int, default=2)
@@ -85,20 +99,21 @@ def main():
     ds = DummyEdgeDataset()
     dl = DataLoader(ds, batch_size=args.batch, shuffle=True, drop_last=True)
 
-    model = DMOREdgeNet(channels=32, topk=args.topk).to(device)
+    # NOTE: router_mode passed into net -> dmor
+    model = DMOREdgeNet(channels=32, topk=args.topk, router_mode=args.router).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
 
-    # parameter count (proposal: <1M)
     total_params = sum(p.numel() for p in model.parameters())
     dmor_params = sum(p.numel() for p in model.dmor.parameters())
-    print(f"[INFO] device={device} seed={args.seed} topk={args.topk} lr={args.lr} iters={args.iters}")
+
+    print(f"[INFO] device={device} seed={args.seed} router={args.router} topk={args.topk} lr={args.lr} iters={args.iters}")
     print(f"[INFO] params: total={total_params:,} | dmor={dmor_params:,}")
 
-    # training loop
     model.train()
     t0 = time.time()
     last_ent = None
-    last_ratio = None
+    last_winner_ratio = None
+    last_topk_ratio = None
 
     it = 0
     for x, y in dl:
@@ -112,9 +127,8 @@ def main():
         loss.backward()
         opt.step()
 
-        # lightweight interpretability stats (proposal-aligned)
-        ent_mean, ratio = routing_stats(weights.detach())
-        last_ent, last_ratio = ent_mean, ratio
+        ent_mean, winner_ratio, topk_ratio = routing_stats(weights.detach(), topk=(0 if args.router == "uniform" else args.topk))
+        last_ent, last_winner_ratio, last_topk_ratio = ent_mean, winner_ratio, topk_ratio
 
         if it % 10 == 0:
             print(f"iter {it:03d} | loss {loss.item():.4f} | ent {ent_mean:.4f}")
@@ -124,13 +138,14 @@ def main():
 
     dt = time.time() - t0
 
-    # write a tiny log for ablation table
-    log_path = os.path.join(args.save_dir, f"topk{args.topk}_seed{args.seed}.txt")
+    log_path = os.path.join(args.save_dir, f"router{args.router}_topk{args.topk}_seed{args.seed}.txt")
     with open(log_path, "w", encoding="utf-8") as f:
+        f.write(f"router={args.router}\n")
         f.write(f"topk={args.topk}\nseed={args.seed}\ndevice={device}\nlr={args.lr}\niters={args.iters}\n")
         f.write(f"total_params={total_params}\ndmor_params={dmor_params}\n")
         f.write(f"final_loss={loss.item():.6f}\nfinal_entropy={last_ent:.6f}\n")
-        f.write("top1_ratio_per_op=" + ",".join([f"{r:.6f}" for r in last_ratio]) + "\n")
+        f.write("winner_ratio_per_op=" + ",".join([f"{r:.6f}" for r in last_winner_ratio]) + "\n")
+        f.write("topk_membership_ratio_per_op=" + ",".join([f"{r:.6f}" for r in last_topk_ratio]) + "\n")
         f.write(f"time_sec={dt:.3f}\n")
 
     print(f"✅ finished | final loss {loss.item():.4f} | ent {last_ent:.4f} | log -> {log_path}")

@@ -36,10 +36,10 @@ class DMOREdgeNet(nn.Module):
     Backbone → DMOR → Head
     完整最小闭环网络（proposal 中的 DMOR-Edge 核心链路）
     """
-    def __init__(self, channels=32, topk=0):
+    def __init__(self, channels=32, topk=0, router_mode="dmor"):
         super().__init__()
         self.backbone = TinyBackbone(channels)
-        self.dmor = DMOR(channels=channels, topk=topk)
+        self.dmor = DMOR(channels=channels, topk=topk, router_mode=router_mode)
         self.head = EdgeHead(channels)
 
     def forward(self, x, return_weights=False):
