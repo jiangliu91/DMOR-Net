@@ -1,120 +1,147 @@
 # DMOR-Edge
 
-Dynamic Modulated Operator Router for Lightweight Edge Detection
+**Dynamic Modulated Operator Router for Lightweight Edge Detection**
 
-## Abstract
-We propose DMOR-Edge, a lightweight edge detection framework that performs
-dynamic operator rou# DMOR-Edge
-
-Dynamic Modulated Operator Router for Lightweight Edge Detection
+DMOR-Edge is a lightweight edge-aware feature learning framework that performs **dynamic operator routing** in operator space.  
+Instead of fixed multi-branch architectures, DMOR adaptively selects complementary edge-aware operators conditioned on **global image context** and **spatial location**, improving boundary localization while suppressing texture-induced false edges.
 
 ---
 
-## Overview
-DMOR-Edge is a lightweight edge detection framework that performs **dynamic operator routing
-in operator space**. Instead of relying on fixed multi-branch architectures, DMOR-Edge
-adaptively selects complementary edge operators conditioned on **global image context**
-and **spatial location**, improving boundary localization while effectively suppressing
-texture-induced false edges.
+## Highlights
+
+- **Operator Pool (O1–O5)**: complementary edge-aware operators with different inductive biases  
+- **Dynamic Modulated Operator Router (DMOR)**:
+  - Global routing (image-level operator preference)
+  - Spatial routing (pixel-wise operator selection)
+  - **Top-K sparse routing** for efficiency and interpretability
+- **Lightweight-ready design**: suitable for compact backbones (<1M parameters target)
 
 ---
 
-## Method
+## Repository Structure
 
-### Operator Pool (O1–O5)
-We construct a pool of complementary edge-aware operators, each encoding a distinct
-inductive bias:
-
-- **O1: Learnable Difference Operator**  
-  Enhances local intensity variations and sharp transitions.
-
-- **O2: Center-Difference Convolution (CDC)**  
-  Strengthens edge response while maintaining parameter efficiency.
-
-- **O3: Direction-Aware Operator (1×3 + 3×1)**  
-  Captures horizontal and vertical edge structures with strong orientation sensitivity.
-
-- **O4: Lightweight Multi-scale Context Operator**  
-  Expands receptive fields using dilated convolution for weak and long-range boundaries.
-
-- **O5: Edge-Preserving Smoothing Operator**  
-  Suppresses texture noise while preserving structural edges.
+```text
+DMOR-Edge/
+├─ models/
+│  ├─ dmor.py        # DMOR module (routing + Top-K sparse selection)
+│  ├─ operators.py   # Operator pool (O1–O5)
+│  ├─ net.py         # Minimal end-to-end edge detection network
+│  └─ __init__.py
+├─ scripts/
+│  ├─ test_dmor.py        # DMOR module sanity check
+│  └─ train_minimal.py   # Minimal end-to-end training (toy edge task)
+├─ .gitignore
+├─ LICENSE
+└─ README.md
+```
 
 ---
 
-### Dynamic Modulated Operator Router (DMOR)
-Given the operator pool, a **Dynamic Modulated Operator Router (DMOR)** is introduced to
-adaptively aggregate operator responses:
+## Environment
 
-- **Global Routing**  
-  Learns image-level operator preferences via global context encoding.
+Tested on **Windows + Conda**.
 
-- **Spatial Routing**  
-  Produces pixel-wise routing weights for location-aware operator selection.
+### 1) Create conda environment (recommended)
 
-- **Top-K Sparse Routing**  
-  Activates only the most relevant operators to improve efficiency and interpretability.
+```bash
+conda create -n dmore python=3.9 -y
+conda activate dmore
+```
 
-The final output is obtained as a weighted summation of selected operator responses.
+### 2) Install dependencies
 
----
+Minimal running requires **PyTorch**.  
+Install PyTorch following official instructions for your CUDA / CPU setup.
 
-## Code Structure
+Verify installation:
 
-DMOR-Edge performs dynamic routing in operator space. Instead of fixed multi-branch
-architectures, DMOR-Edge adaptively selects complementary edge operators
-according to global image context and spatial location, improving boundary
-localization while suppressing texture noise.
-
-architectures, DMOR-Edge adaptively selects complementary edge operators
-according to global image context and spatial location, improving boundary
-localization while suppressing texture noise.
+```bash
+python -c "import torch; print(torch.__version__)"
+```
 
 ---
 
 ## Quick Start
 
-```python
-import torch
-from models import DMOR
+### A) DMOR Sanity Check
 
-# Dummy input feature map
-x = torch.randn(2, 32, 128, 128)
+From the project root:
 
-# Initialize DMOR module
-dmor = DMOR(channels=32, topk=2)
+```bash
+python -m scripts.test_dmor
+```
 
-# Forward pass
-y = dmor(x)
-print(y.shape)  # Expected: [2, 32, 128, 128]
+Expected output (example):
+
+- Feature shape: `[B, C, H, W]`
+- Routing weight shape: `[B, N_ops, H, W]`
+- Message: `DMOR training sanity passed`
+
+This verifies:
+- Operator pool correctness
+- Routing normalization
+- Gradient flow through DMOR
+
+---
+
+### B) Minimal End-to-End Training
+
+This script verifies the full training path:
+
+**Backbone → DMOR → Edge Head → Loss → Backpropagation**
+
+```bash
+python -m scripts.train_minimal
+```
+
+Expected output (example):
+
+```text
+iter 010 | loss ...
+iter 020 | loss ...
+iter 030 | loss ...
+...
+minimal end-to-end training finished
 ```
 
 ---
 
-## Method
-DMOR-Edge constructs an operator pool consisting of complementary edge-aware
-operators, including learnable difference, center-difference convolution,
-direction-aware filtering, lightweight multi-scale context, and edge-preserving
-smoothing.
+## Top-K Sparse Routing Ablation (Proposal-Aligned)
 
-A Dynamic Modulated Operator Router (DMOR) is introduced to perform:
-- Global routing for image-level operator preference
-- Spatial routing for pixel-wise operator selection
-- Top-K sparse routing for efficiency and interpretability
+DMOR supports **Top-K sparse routing** via the `topk` parameter.
 
-## Experiments
-Experiments are conducted on BSDS500, BIPED, and NYUD datasets.
-Evaluation metrics include ODS, OIS, AP, parameter count, and FLOPs.
+In `scripts/train_minimal.py`:
 
-## Ablation Studies
-We analyze the effect of:
-- Global vs spatial routing
-- Top-K sparse routing
-- Individual operators in the operator pool
-- Routing depth and insertion positions
+```python
+model = DMOREdgeNet(channels=32, topk=K).to(device)
+```
 
-## Status
-🚧 Training scripts and pretrained models will be released soon.
+- `topk = 0` : dense routing (softmax over all operators)  
+- `topk = K` : sparse routing (only Top-K operators activated per spatial location)
+
+Recommended ablation settings:
+
+```text
+topk ∈ {1, 2, 3, 5}
+```
+
+Run:
+
+```bash
+python -m scripts.train_minimal
+```
+
+This setup is directly aligned with the **Top-K ablation study** described in the proposal.
+
+---
+
+## Notes
+
+- `__pycache__/` directories are ignored via `.gitignore`
+- This repository is designed for **research prototyping and ablation studies**
+
+---
 
 ## License
+
 MIT
