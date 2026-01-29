@@ -29,15 +29,14 @@ def main():
 
     # ===== DMOR =====
     dmor = DMOR(
-        channels=32,
-        topk=0,                 # ⚠️ 先关 Top-K，保证闭环
-        return_routing=True
+    channels=32,
+    topk=0
     ).to(device)
 
     dmor.train()
 
     # ===== Forward =====
-    feat, routing = dmor(x)
+    feat, routing = dmor(x, return_weights=True)
 
     print("[OK] feature:", feat.shape)
     print("[OK] routing:", routing.shape)

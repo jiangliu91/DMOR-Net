@@ -56,3 +56,17 @@ class EdgePreserveSmooth(nn.Module):
 
     def forward(self, x):
         return x - self.avg(x)
+
+
+def build_operator_pool(channels: int) -> nn.ModuleList:
+    """
+    Build the operator pool O1-O5 in a fixed order.
+    Returns: ModuleList of operators, each maps [B,C,H,W] -> [B,C,H,W]
+    """
+    return nn.ModuleList([
+        LearnableDiff(channels),
+        CenterDiffConv(channels),
+        DirectionAware(channels),
+        DilatedContext(channels, dilation=2),
+        EdgePreserveSmooth(channels),
+    ])

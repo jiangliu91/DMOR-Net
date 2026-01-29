@@ -1,54 +1,88 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from .operators import *
+
+from .operators import build_operator_pool
+
+
+class GlobalRouter(nn.Module):
+    """Global routing: x -> [B, N]"""
+    def __init__(self, channels: int, num_ops: int, reduction: int = 4):
+        super().__init__()
+        hidden = max(channels // reduction, 8)
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.mlp = nn.Sequential(
+            nn.Conv2d(channels, hidden, 1, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(hidden, num_ops, 1, bias=True),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        xg = self.pool(x)          # [B, C, 1, 1]
+        logits = self.mlp(xg)      # [B, N, 1, 1]
+        return logits.squeeze(-1).squeeze(-1)  # [B, N]
+
+
+class SpatialRouter(nn.Module):
+    """Spatial routing: x -> [B, N, H, W]"""
+    def __init__(self, channels: int, num_ops: int):
+        super().__init__()
+        self.conv = nn.Conv2d(channels, num_ops, kernel_size=1, bias=True)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.conv(x)        # [B, N, H, W]
 
 
 class DMOR(nn.Module):
-    def __init__(self, channels, topk=2):
+    """
+    DMOR block:
+      - operator pool O1-O5
+      - global + spatial routers
+      - softmax across operator dimension
+      - optional top-k sparse routing
+    """
+    def __init__(self, channels: int = 32, topk: int = 0):
         super().__init__()
-        self.topk = topk
+        self.channels = int(channels)
+        self.topk = int(topk)
 
-        # Operator pool
-        self.ops = nn.ModuleList([
-            LearnableDiff(channels),
-            CenterDiffConv(channels),
-            DirectionAware(channels),
-            DilatedContext(channels),
-            EdgePreserveSmooth(channels)
-        ])
+        # Operators
+        self.ops = build_operator_pool(self.channels)
+        self.num_ops = len(self.ops)
 
-        num_ops = len(self.ops)
+        # Routers
+        self.global_router = GlobalRouter(self.channels, self.num_ops)
+        self.spatial_router = SpatialRouter(self.channels, self.num_ops)
 
-        # Global routing
-        self.global_router = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),
-            nn.Conv2d(channels, channels // 4, 1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(channels // 4, num_ops, 1)
-        )
+    def forward(self, x: torch.Tensor, return_weights: bool = False):
+        """
+        x: [B, C, H, W]
+        return:
+          out: [B, C, H, W]
+          weights(optional): [B, N, H, W]
+        """
+        B, C, H, W = x.shape
 
-        # Spatial routing
-        self.spatial_router = nn.Conv2d(channels, num_ops, 1)
+        # Operator responses: [B, N, C, H, W]
+        op_feats = torch.stack([op(x) for op in self.ops], dim=1)
 
-    def forward(self, x, return_weights: bool = False):
-    B, C, H, W = x.shape
-    op_feats = torch.stack([op(x) for op in self.ops], dim=1)  # [B, N, C, H, W]
+        # Routing logits
+        w_global = self.global_router(x).view(B, self.num_ops, 1, 1)  # [B, N, 1, 1]
+        w_spatial = self.spatial_router(x)                            # [B, N, H, W]
 
-    # Routing weights
-    w_global = self.global_router(x).view(B, -1, 1, 1)
-    w_spatial = self.spatial_router(x)
-    weights = torch.softmax(w_global + w_spatial, dim=1)
+        # Normalized weights
+        weights = torch.softmax(w_global + w_spatial, dim=1)          # [B, N, H, W]
 
-    # Top-K sparse routing
-    if self.topk < weights.shape[1]:
-        topk_vals, topk_idx = torch.topk(weights, self.topk, dim=1)
-        mask = torch.zeros_like(weights).scatter_(1, topk_idx, 1.0)
-        weights = weights * mask
-        weights = weights / (weights.sum(dim=1, keepdim=True) + 1e-6)
+        # Top-K sparse routing (optional)
+        if self.topk > 0 and self.topk < self.num_ops:
+            _, idx = torch.topk(weights, self.topk, dim=1)
+            mask = torch.zeros_like(weights)
+            mask.scatter_(1, idx, 1.0)
+            weights = weights * mask
+            weights = weights / (weights.sum(dim=1, keepdim=True) + 1e-6)
 
-    out = (weights.unsqueeze(2) * op_feats).sum(dim=1)
+        # Weighted sum over operators
+        out = (weights.unsqueeze(2) * op_feats).sum(dim=1)            # [B, C, H, W]
 
-    if return_weights:
-        return out, weights
-    return out
+        if return_weights:
+            return out, weights
+        return out
