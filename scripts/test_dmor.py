@@ -1,8 +1,13 @@
-import os, sys
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+import os
+import sys
+
+# 把项目根目录加入 Python 搜索路径
+ROOT = os.path.dirname(os.path.dirname(__file__))
+sys.path.insert(0, ROOT)
 
 import torch
 from models.dmor import DMOR
+
 
 
 def balanced_bce(pred, gt):
