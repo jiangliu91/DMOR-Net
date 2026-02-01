@@ -1,9 +1,12 @@
+# scripts/train_minimal.py
 import argparse
+import json
 import os
 import random
 import time
 
 import torch
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
 from models.net import DMOREdgeNet
@@ -33,13 +36,15 @@ def set_seed(seed: int):
     torch.backends.cudnn.benchmark = False
 
 
-def balanced_bce_with_logits(logits, gt):
-    pred = torch.sigmoid(logits).clamp(1e-6, 1 - 1e-6)
+def balanced_bce_with_logits(logits: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
+    """
+    Stable balanced BCE using PyTorch's logits loss.
+    pos_weight = neg/pos to upweight positives.
+    """
     pos = gt.sum().clamp_min(1.0)
-    neg = (1 - gt).sum().clamp_min(1.0)
-    beta = neg / (pos + neg)
-    loss = -beta * (1 - gt) * torch.log(1 - pred) - (1 - beta) * gt * torch.log(pred)
-    return loss.mean()
+    neg = (1.0 - gt).sum().clamp_min(1.0)
+    pos_weight = (neg / pos).detach()
+    return F.binary_cross_entropy_with_logits(logits, gt, pos_weight=pos_weight)
 
 
 @torch.no_grad()
@@ -49,29 +54,47 @@ def routing_stats(weights: torch.Tensor, topk: int):
     topk:
       - 0 means dense
       - K>0 means sparse top-k
-    Return:
+    Return dict:
       - entropy_mean
+      - confidence_mean (max prob)
+      - eff_num_ops_mean (exp(entropy))
       - winner_ratio_per_op (Top-1)
       - topk_membership_ratio_per_op (true Top-K; dense uses N)
     """
     eps = 1e-9
     p = weights.clamp_min(eps)
 
+    # entropy per pixel then mean
     ent = -(p * p.log()).sum(dim=1)  # [B,H,W]
     ent_mean = ent.mean().item()
 
+    # confidence: mean max prob
+    conf = p.max(dim=1).values  # [B,H,W]
+    conf_mean = conf.mean().item()
+
+    # effective number of ops: exp(entropy)
+    eff_num = torch.exp(ent).mean().item()
+
+    # top-1 winner distribution
     top1 = p.argmax(dim=1)  # [B,H,W]
     N = p.shape[1]
     counts = torch.bincount(top1.flatten(), minlength=N).float()
     winner_ratio = (counts / counts.sum().clamp_min(1.0)).cpu().tolist()
 
+    # membership distribution in Top-K (or Top-N for dense)
     effective_k = N if topk == 0 else topk
     topk_idx = torch.topk(p, k=effective_k, dim=1).indices  # [B,K,H,W]
     mem_counts = torch.bincount(topk_idx.flatten(), minlength=N).float()
     denom = mem_counts.sum().clamp_min(1.0)
     topk_ratio = (mem_counts / denom).cpu().tolist()
 
-    return ent_mean, winner_ratio, topk_ratio
+    return {
+        "entropy_mean": ent_mean,
+        "confidence_mean": conf_mean,
+        "eff_num_ops_mean": eff_num,
+        "winner_ratio_per_op": winner_ratio,
+        "topk_membership_ratio_per_op": topk_ratio,
+    }
 
 
 def main():
@@ -85,6 +108,8 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda"])
     parser.add_argument("--save_dir", type=str, default="runs_minimal")
+    parser.add_argument("--amp", action="store_true", help="enable mixed precision on cuda")
+    parser.add_argument("--temperature", type=float, default=1.0, help="softmax temperature for dmor routing")
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -97,58 +122,88 @@ def main():
     os.makedirs(args.save_dir, exist_ok=True)
 
     ds = DummyEdgeDataset()
-    dl = DataLoader(ds, batch_size=args.batch, shuffle=True, drop_last=True)
+    dl = DataLoader(ds, batch_size=args.batch, shuffle=True, drop_last=True, num_workers=0)
 
-    # NOTE: router_mode passed into net -> dmor
-    model = DMOREdgeNet(channels=32, topk=args.topk, router_mode=args.router).to(device)
+    model = DMOREdgeNet(channels=32, topk=args.topk, router_mode=args.router, temperature=args.temperature).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     total_params = sum(p.numel() for p in model.parameters())
     dmor_params = sum(p.numel() for p in model.dmor.parameters())
 
-    print(f"[INFO] device={device} seed={args.seed} router={args.router} topk={args.topk} lr={args.lr} iters={args.iters}")
+    use_amp = bool(args.amp and device == "cuda")
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+
+    print(f"[INFO] device={device} seed={args.seed} router={args.router} topk={args.topk} "
+          f"lr={args.lr} iters={args.iters} batch={args.batch} amp={use_amp} temp={args.temperature}")
     print(f"[INFO] params: total={total_params:,} | dmor={dmor_params:,}")
 
     model.train()
     t0 = time.time()
-    last_ent = None
-    last_winner_ratio = None
-    last_topk_ratio = None
+
+    last_loss = None
+    last_stats = None
 
     it = 0
     for x, y in dl:
         it += 1
         x, y = x.to(device), y.to(device)
 
-        logits, weights = model(x, return_weights=True)
-        loss = balanced_bce_with_logits(logits, y)
-
         opt.zero_grad(set_to_none=True)
-        loss.backward()
-        opt.step()
 
-        ent_mean, winner_ratio, topk_ratio = routing_stats(weights.detach(), topk=(0 if args.router == "uniform" else args.topk))
-        last_ent, last_winner_ratio, last_topk_ratio = ent_mean, winner_ratio, topk_ratio
+        with torch.cuda.amp.autocast(enabled=use_amp):
+            logits, weights = model(x, return_weights=True)
+            loss = balanced_bce_with_logits(logits, y)
+
+        scaler.scale(loss).backward()
+        scaler.step(opt)
+        scaler.update()
+
+        # router=uniform should be treated as dense for stats
+        stats_topk = 0 if args.router == "uniform" else args.topk
+        last_stats = routing_stats(weights.detach(), topk=stats_topk)
+        last_loss = loss.item()
 
         if it % 10 == 0:
-            print(f"iter {it:03d} | loss {loss.item():.4f} | ent {ent_mean:.4f}")
+            print(f"iter {it:03d} | loss {last_loss:.4f} | ent {last_stats['entropy_mean']:.4f} "
+                  f"| conf {last_stats['confidence_mean']:.4f} | effN {last_stats['eff_num_ops_mean']:.2f}")
 
         if it >= args.iters:
             break
 
     dt = time.time() - t0
 
-    log_path = os.path.join(args.save_dir, f"router{args.router}_topk{args.topk}_seed{args.seed}.txt")
-    with open(log_path, "w", encoding="utf-8") as f:
-        f.write(f"router={args.router}\n")
-        f.write(f"topk={args.topk}\nseed={args.seed}\ndevice={device}\nlr={args.lr}\niters={args.iters}\n")
-        f.write(f"total_params={total_params}\ndmor_params={dmor_params}\n")
-        f.write(f"final_loss={loss.item():.6f}\nfinal_entropy={last_ent:.6f}\n")
-        f.write("winner_ratio_per_op=" + ",".join([f"{r:.6f}" for r in last_winner_ratio]) + "\n")
-        f.write("topk_membership_ratio_per_op=" + ",".join([f"{r:.6f}" for r in last_topk_ratio]) + "\n")
-        f.write(f"time_sec={dt:.3f}\n")
+    # --- write logs ---
+    stem = f"router{args.router}_topk{args.topk}_seed{args.seed}"
+    txt_path = os.path.join(args.save_dir, f"{stem}.txt")
+    json_path = os.path.join(args.save_dir, f"{stem}.json")
 
-    print(f"✅ finished | final loss {loss.item():.4f} | ent {last_ent:.4f} | log -> {log_path}")
+    payload = {
+        "router": args.router,
+        "topk": args.topk,
+        "seed": args.seed,
+        "device": device,
+        "lr": args.lr,
+        "iters": args.iters,
+        "batch": args.batch,
+        "amp": use_amp,
+        "temperature": args.temperature,
+        "total_params": int(total_params),
+        "dmor_params": int(dmor_params),
+        "final_loss": float(last_loss),
+        "time_sec": float(dt),
+        **(last_stats if last_stats is not None else {}),
+    }
+
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+    with open(txt_path, "w", encoding="utf-8") as f:
+        for k, v in payload.items():
+            f.write(f"{k}={v}\n")
+
+    print(f"✅ finished | final loss {last_loss:.4f} | ent {payload.get('entropy_mean', 0.0):.4f}")
+    print(f"[LOG] {txt_path}")
+    print(f"[LOG] {json_path}")
 
 
 if __name__ == "__main__":
