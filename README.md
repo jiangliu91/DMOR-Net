@@ -90,38 +90,17 @@ python scripts/test_dmor.py
 
 ### 1. DMOR with Dense Routing
 ```bash
-python -m scripts.train_minimal \
-  --router dmor \
-  --topk 0 \
-  --iters 5000 \
-  --lr 1e-3 \
-  --batch 4 \
-  --seed 0 \
-  --device cpu \
-  --save_dir runs/router_ablate/dmor_dense
+python -m scripts.train_minimal   --router dmor   --topk 0   --iters 5000   --lr 1e-3   --batch 4   --seed 0   --device gpu   --save_dir runs/router_ablate/dmor_dense
 ```
 
 ### 2. No-Router (Uniform) Baseline
 ```bash
-python -m scripts.train_minimal \
-  --router uniform \
-  --topk 0 \
-  --iters 5000 \
-  --lr 1e-3 \
-  --batch 4 \
-  --seed 0 \
-  --device cpu \
-  --save_dir runs/router_ablate/uniform
+python -m scripts.train_minimal   --router uniform   --topk 0   --iters 5000   --lr 1e-3   --batch 4   --seed 0   --device gpu   --save_dir runs/router_ablate/uniform
 ```
 
 ### 3. Top-K Sparse Routing
 ```bash
-python -m scripts.train_minimal \
-  --router dmor \
-  --topk 2 \
-  --iters 5000 \
-  --lr 1e-3 \
-  --batch 4
+python -m scripts.train_minimal   --router dmor   --topk 2   --iters 5000   --lr 1e-3   --batch 4   --device gpu
 ```
 
 Supported `--topk` values:
