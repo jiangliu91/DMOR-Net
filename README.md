@@ -72,7 +72,7 @@ This code depends only on PyTorch and standard Python packages.
 ```bash
 conda create -n dmore python=3.9
 conda activate dmore
-pip install torch torchvision
+pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 ```
 
 ---
