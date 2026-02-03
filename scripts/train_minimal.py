@@ -51,42 +51,39 @@ def balanced_bce_with_logits(logits: torch.Tensor, gt: torch.Tensor) -> torch.Te
 def routing_stats(weights: torch.Tensor, topk: int):
     """
     weights: [B, N, H, W] routing weights (after topk masking if enabled)
-    topk:
-      - 0 means dense
-      - K>0 means sparse top-k
-    Return dict:
+    Returns dict:
       - entropy_mean
-      - confidence_mean (max prob)
-      - eff_num_ops_mean (exp(entropy))
-      - winner_ratio_per_op (Top-1)
-      - topk_membership_ratio_per_op (true Top-K; dense uses N)
+      - confidence_mean (mean max prob)
+      - eff_num_ops_mean (mean exp(entropy))
+      - winner_ratio_per_op (Top-1 operator histogram)
+      - topk_membership_ratio_per_op (Top-K membership histogram)
+      - collapse_ratio (max winner ratio; >0.8 often indicates collapse)
+      - unused_ops (count of ops with membership < 1%)
     """
     eps = 1e-9
     p = weights.clamp_min(eps)
 
-    # entropy per pixel then mean
     ent = -(p * p.log()).sum(dim=1)  # [B,H,W]
     ent_mean = ent.mean().item()
 
-    # confidence: mean max prob
-    conf = p.max(dim=1).values  # [B,H,W]
+    conf = p.max(dim=1).values
     conf_mean = conf.mean().item()
 
-    # effective number of ops: exp(entropy)
     eff_num = torch.exp(ent).mean().item()
 
-    # top-1 winner distribution
     top1 = p.argmax(dim=1)  # [B,H,W]
     N = p.shape[1]
     counts = torch.bincount(top1.flatten(), minlength=N).float()
     winner_ratio = (counts / counts.sum().clamp_min(1.0)).cpu().tolist()
 
-    # membership distribution in Top-K (or Top-N for dense)
     effective_k = N if topk == 0 else topk
     topk_idx = torch.topk(p, k=effective_k, dim=1).indices  # [B,K,H,W]
     mem_counts = torch.bincount(topk_idx.flatten(), minlength=N).float()
     denom = mem_counts.sum().clamp_min(1.0)
     topk_ratio = (mem_counts / denom).cpu().tolist()
+
+    collapse_ratio = float(max(winner_ratio)) if winner_ratio else 0.0
+    unused_ops = int(sum(1 for r in topk_ratio if r < 0.01))  # <1% membership considered unused
 
     return {
         "entropy_mean": ent_mean,
@@ -94,6 +91,8 @@ def routing_stats(weights: torch.Tensor, topk: int):
         "eff_num_ops_mean": eff_num,
         "winner_ratio_per_op": winner_ratio,
         "topk_membership_ratio_per_op": topk_ratio,
+        "collapse_ratio": collapse_ratio,
+        "unused_ops": unused_ops,
     }
 
 

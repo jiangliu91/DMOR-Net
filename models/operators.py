@@ -1,11 +1,16 @@
 # models/operators.py
+from __future__ import annotations
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 
 class LearnableDiff(nn.Module):
-    """O1: Learnable Difference Operator (depthwise)"""
+    """
+    O1: Learnable difference (high-pass) via depthwise smoothing.
+      y = x - DWConv3x3(x)
+    """
     def __init__(self, channels: int):
         super().__init__()
         self.conv = nn.Conv2d(
@@ -14,16 +19,15 @@ class LearnableDiff(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # High-pass style: x - smooth(x) where smooth is learnable depthwise conv
         return x - self.conv(x)
 
 
 class CenterDiffConv(nn.Module):
     """
-    O2: Center-Difference Convolution (CDC-like)
-    Implements a center-difference re-parameterization of conv weights.
+    O2: Center-difference convolution (CDC-like).
+    Builds a modified conv weight where the center term is replaced by (center - sum_neighborhood).
 
-    Note: This is still learnable, but encourages sensitivity to local changes.
+    Implementation is intentionally explicit to avoid in-place weight edits.
     """
     def __init__(self, channels: int):
         super().__init__()
@@ -31,22 +35,20 @@ class CenterDiffConv(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         w = self.conv.weight  # [Cout,Cin,3,3]
-        # sum over spatial dims
-        sum_w = w.sum(dim=(2, 3), keepdim=True)          # [Cout,Cin,1,1]
-        center = w[:, :, 1:2, 1:2]                       # [Cout,Cin,1,1]
+        sum_w = w.sum(dim=(2, 3), keepdim=True)     # [Cout,Cin,1,1]
+        center = w[:, :, 1:2, 1:2]                  # [Cout,Cin,1,1]
 
-        # Build CDC-style weight:
-        # - Non-center weights keep as is
-        # - Center weight becomes (center - sum_w)
-        # We avoid in-place on w; create diff_w explicitly
         diff_w = w.clone()
         diff_w[:, :, 1:2, 1:2] = center - sum_w
 
-        return F.conv2d(x, diff_w, bias=None, stride=1, padding=1, dilation=1, groups=1)
+        return F.conv2d(x, diff_w, bias=None, stride=1, padding=1)
 
 
 class DirectionAware(nn.Module):
-    """O3: Direction-aware (1x3 + 3x1)"""
+    """
+    O3: Direction-aware filtering using 1x3 + 3x1.
+    Encourages horizontal/vertical edge sensitivity at low cost.
+    """
     def __init__(self, channels: int):
         super().__init__()
         self.h = nn.Conv2d(channels, channels, kernel_size=(1, 3), padding=(0, 1), bias=False)
@@ -57,12 +59,16 @@ class DirectionAware(nn.Module):
 
 
 class DilatedContext(nn.Module):
-    """O4: Lightweight multi-scale context via dilation"""
+    """
+    O4: Dilated 3x3 conv for lightweight context aggregation.
+    Useful for structural continuity / weak edge confirmation.
+    """
     def __init__(self, channels: int, dilation: int = 2):
         super().__init__()
+        self.dilation = int(dilation)
         self.conv = nn.Conv2d(
             channels, channels, kernel_size=3,
-            padding=dilation, dilation=dilation, bias=False
+            padding=self.dilation, dilation=self.dilation, bias=False
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -70,7 +76,11 @@ class DilatedContext(nn.Module):
 
 
 class EdgePreserveSmooth(nn.Module):
-    """O5: Edge-preserving smoothing (fixed avg pool high-pass)"""
+    """
+    O5: Fixed smoothing high-pass:
+      y = x - AvgPool3x3(x)
+    Keeps a stable, non-learned operator to preserve operator diversity.
+    """
     def __init__(self, channels: int):
         super().__init__()
         self.avg = nn.AvgPool2d(kernel_size=3, stride=1, padding=1)
@@ -81,16 +91,18 @@ class EdgePreserveSmooth(nn.Module):
 
 def build_operator_pool(channels: int, *, dilation: int = 2) -> nn.ModuleList:
     """
-    Build the operator pool O1-O5 in a fixed order.
-    Returns: ModuleList of operators, each maps [B,C,H,W] -> [B,C,H,W]
+    Build the operator pool with a fixed, meaningful order.
 
     Order (fixed):
       0: LearnableDiff
       1: CenterDiffConv
       2: DirectionAware
-      3: DilatedContext (dilation configurable, default=2)
+      3: DilatedContext
       4: EdgePreserveSmooth
+
+    Each op maps: [B,C,H,W] -> [B,C,H,W]
     """
+    channels = int(channels)
     return nn.ModuleList([
         LearnableDiff(channels),
         CenterDiffConv(channels),
