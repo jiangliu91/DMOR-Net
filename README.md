@@ -2,55 +2,64 @@
 Dynamic Modulated Operator Router for Lightweight Edge Detection
 
 ## Overview
-DMOR-Edge introduces a **Dynamic Modulated Operator Router (DMOR)** for lightweight edge detection.
-Instead of relying on a single fixed operator, DMOR adaptively combines a small pool of complementary
-lightweight operators using **learned, spatially-varying routing weights**.
+DMOR-Edge introduces a **Dynamic Modulated Operator Router (DMOR)** that adaptively combines multiple
+lightweight operators for edge detection.
+The router assigns **spatially-varying, content-adaptive weights** to operators, enabling flexible
+feature modulation with minimal parameter overhead.
 
-This repository is intentionally designed for **clean ablation, interpretability, and reproducibility**,
-rather than leaderboard-oriented optimization.
-
-Key characteristics:
-- Dynamic operator routing with global + spatial modulation
-- Optional **Top-K sparse routing** for controlled sparsity
-- A strict **No-Router (uniform) baseline** for fair comparison
-- Lightweight design (<1M parameters)
-- Simple CLI-based experimental workflow
+This repository focuses on **clean ablation design, interpretability, and reproducibility**, including:
+- Top-K sparse routing with proper renormalization
+- A **No-Router (uniform) baseline** for fair comparison
+- Lightweight parameter budget (<1M parameters)
+- Explicit routing diagnostics and sanity checks
+- Simple, script-based experimental workflow
 
 ---
 
-## Method: Dynamic Modulated Operator Router (DMOR)
-
+## Method: DMOR
 Given an input feature map, DMOR performs the following steps:
 
-1. Apply a pool of predefined lightweight operators
-2. Generate routing logits via global and spatial routers
-3. Normalize routing weights using softmax
-4. Optionally enforce **Top-K sparsity** on routing weights
-5. Aggregate operator outputs by weighted summation
+1. **Operator Pool Evaluation**  
+   A fixed pool of lightweight, resolution-preserving operators is applied in parallel.
 
-### No-Router (Uniform) Baseline
-To isolate the contribution of routing, DMOR-Edge provides a **uniform baseline** in which:
-- No routing network is used
-- No Top-K masking is applied
-- All operators are equally weighted (1 / N)
+2. **Routing Logit Generation**  
+   - A **global router** produces image-level operator priors  
+   - A **spatial router** produces pixel-wise routing logits
 
-This baseline serves as a principled reference for ablation studies and reviewer-facing analysis.
+3. **Weight Normalization**  
+   Routing logits are combined, temperature-scaled, and normalized via softmax.
+
+4. **Optional Top-K Sparsification**  
+   - Per-pixel Top-K masking is applied  
+   - Remaining weights are **renormalized** to ensure numerical correctness
+
+5. **Weighted Fusion**  
+   Operator outputs are aggregated using a memory-efficient weighted summation
+   (without stacking large intermediate tensors).
+
+### No-Router Baseline
+To isolate the contribution of routing, a **uniform (no-router) baseline** is provided:
+- No routing network
+- No Top-K masking
+- Equal weights (1 / N) for all operators
+
+This baseline is critical for principled ablation and reviewer-facing comparisons.
 
 ---
 
 ## Repository Structure
-
-```text
+```
 DMOR-Edge/
 ├── models/
-│   ├── __init__.py
-│   ├── operators.py      # Lightweight operator pool
-│   ├── dmor.py           # DMOR routing module (dmor / uniform)
-│   └── net.py            # Tiny backbone + DMOR + edge head
+│   ├── __init__.py        # Public API and versioning
+│   ├── dmor.py            # DMOR routing & fusion block
+│   ├── net.py             # Minimal end-to-end edge network
+│   └── operators.py      # Lightweight operator pool
 ├── scripts/
-│   ├── test_dmor.py      # Training sanity check
-│   ├── train_minimal.py  # Minimal end-to-end training & routing analysis
-│   └── ablate_topk.py    # Top-K / router / seed ablation sweep
+│   ├── train_minimal.py  # Minimal training & routing diagnostics
+│   ├── ablate_topk.py    # Systematic Top-K ablation runner
+│   ├── test_dmor.py      # Training-level sanity checks (incl. Top-K)
+│   └── summarize_runs.py # JSON → CSV ablation summarization
 ├── README.md
 └── LICENSE
 ```
@@ -58,11 +67,10 @@ DMOR-Edge/
 ---
 
 ## Installation
-
-This project depends only on PyTorch and standard Python packages.
+This code depends only on PyTorch and standard Python packages.
 
 ```bash
-conda create -n dmore python=3.9 -y
+conda create -n dmore python=3.9
 conda activate dmore
 pip install torch torchvision
 ```
@@ -70,16 +78,10 @@ pip install torch torchvision
 ---
 
 ## Quick Start
-
-Run a basic sanity check to verify forward/backward correctness:
+Run a training-level sanity check (forward, backward, Top-K correctness):
 
 ```bash
 python scripts/test_dmor.py
-```
-
-Expected output:
-```
-✅ DMOR training sanity passed
 ```
 
 ---
@@ -94,7 +96,9 @@ python -m scripts.train_minimal \
   --iters 5000 \
   --lr 1e-3 \
   --batch 4 \
-  --seed 0
+  --seed 0 \
+  --device cpu \
+  --save_dir runs/router_ablate/dmor_dense
 ```
 
 ### 2. No-Router (Uniform) Baseline
@@ -105,7 +109,9 @@ python -m scripts.train_minimal \
   --iters 5000 \
   --lr 1e-3 \
   --batch 4 \
-  --seed 0
+  --seed 0 \
+  --device cpu \
+  --save_dir runs/router_ablate/uniform
 ```
 
 ### 3. Top-K Sparse Routing
@@ -125,29 +131,38 @@ Supported `--topk` values:
 ---
 
 ## Logged Metrics
-
-Each training run records the following statistics:
+Each run records detailed routing diagnostics:
 - Final training loss
 - Routing entropy
-- Routing confidence (mean max probability)
-- Effective number of active operators
-- Operator selection distribution (Top-1 and Top-K)
-- Parameter counts
-- Runtime
+- Confidence (maximum routing probability)
+- Effective number of operators (`exp(entropy)`)
+- Top-1 operator winner ratio
+- Top-K membership ratio per operator
+- Collapse ratio and unused-operator count
+- Parameter counts and runtime
 
-All metrics are saved in both `.txt` and `.json` formats and are suitable for direct inclusion
-in ablation tables and figures.
+These statistics are designed for **direct inclusion in ablation tables and plots**.
+
+---
+
+## Automatic Ablation Summarization
+After running multiple experiments, all results can be aggregated automatically:
+
+```bash
+python -m scripts.summarize_runs --runs_dir runs_minimal --out_csv summary.csv
+```
+
+This generates a single CSV file suitable for spreadsheet analysis or LaTeX tables.
 
 ---
 
 ## Notes
-
-- Training scripts use a toy edge dataset for sanity and controlled ablation analysis.
-- The framework is designed to be easily extended to real-world edge detection datasets
-  (e.g., BSDS500, BIPED, NYUD).
+- Default experiments use a toy edge dataset to isolate routing behavior
+- The framework is designed to be easily extended to real datasets
+  (e.g., BSDS500, NYUD-v2)
+- A stronger lightweight backbone is available for real-data experiments
 
 ---
 
 ## License
-
 This project is released under the MIT License.
