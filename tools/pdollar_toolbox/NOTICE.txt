@@ -1,0 +1,22 @@
+Piotr Dollár MATLAB Toolbox
+
+This directory contains code from the Piotr Dollár MATLAB Toolbox,
+which is required by the official BSDS500 evaluation benchmark.
+
+Author:
+  Piotr Dollár
+
+Usage:
+  This toolbox is used as a dependency of the BSDSBench evaluation code
+  (e.g., fevalDistr and related utilities).
+
+License:
+  The original toolbox is distributed by the author under a permissive
+  open-source license. Please refer to the original distribution and
+  author-provided license terms for details.
+
+Original source:
+  https://github.com/pdollar/toolbox
+
+This copy is included for research and reproducibility purposes only.
+All rights remain with the original author.
