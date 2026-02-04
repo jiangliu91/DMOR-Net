@@ -2,6 +2,12 @@
 # BSDS500 test export -> PNG (for official BSDS evaluation)
 # This version is CONDA-friendly and supports env vars so you don't have to keep editing the file.
 
+import os, sys
+# Ensure repo root is on PYTHONPATH so `import models` works no matter where this script is launched from.
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
 import os
 from pathlib import Path
 
