@@ -169,6 +169,28 @@ outputs/BSDS500/DMOR/eval_official/
 
 ---
 
+## 📦 Datasets and Third-Party Components (Attribution)
+
+This repository contains **non-original** components for research reproducibility:
+
+### BSDS500 Dataset
+- Name: Berkeley Segmentation Dataset and Benchmark (BSDS500)
+- Purpose: Edge detection evaluation (ODS / OIS / AP)
+- Source: Berkeley Vision Group (official BSDS resources)
+
+### MATLAB BSDSBench (Official Evaluation Code)
+- Purpose: Official BSDS500 evaluation (`edgesEvalDir`, `edgesEvalImg`, etc.)
+- Source: Provided by the BSDS authors / Berkeley Vision Group
+
+### Piotr Dollár MATLAB Toolbox
+- Purpose: Utility toolbox required by BSDSBench (`fevalDistr`, etc.)
+- Author: Piotr Dollár
+
+All datasets and third-party code remain the property of their respective owners.
+They are included here for **research and reproducibility**. If any licensing terms
+require additional attribution or redistribution restrictions, please refer to the
+original sources and licenses shipped with those materials.
+
 ## 📄 License
 
 This project is released under the **MIT License**.
