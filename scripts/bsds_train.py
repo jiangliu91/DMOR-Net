@@ -135,7 +135,7 @@ def main():
 
     set_seed(args.seed)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cuda" 
     out_root = Path(args.out_root)
     ckpt_dir = out_root / "ckpt"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
