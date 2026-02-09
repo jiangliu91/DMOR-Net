@@ -1,196 +1,199 @@
-# DMOR-Edge
+
+# DMOR-EDGE
 **Dynamic Modulated Operator Router for Lightweight Edge Detection**
 
-DMOR-Edge introduces a **Dynamic Modulated Operator Router (DMOR)** for lightweight edge detection.
-The core idea is to dynamically route and combine multiple lightweight operators using
-content-adaptive, spatially-varying weights, achieving strong performance under a strict
-parameter budget.
+DMOR-EDGE is a lightweight, biologically-inspired edge detection framework that introduces
+**dynamic operator routing** into edge detection.  
+Instead of relying on fixed parallel pathways, DMOR-EDGE adaptively selects and fuses
+multiple lightweight edge-sensitive operators based on image content.
 
-This repository is designed with **research reproducibility and interpretability** in mind,
-and provides a **fully automated pipeline** for training, inference, and **official BSDS500
-evaluation**.
+The project is designed for **clean research experiments**, **stable training**, and **reproducible BSDS500 evaluation**.
 
 ---
 
-## ✨ Key Features
+## 🔥 Highlights
 
 - **Dynamic Modulated Operator Router (DMOR)**
-  - Spatially-varying, content-adaptive operator routing
-  - Top-K sparse routing support
-  - Explicit No-Router (uniform) baseline for fair comparison
+  - Operator-space modeling instead of fixed pathways
+  - Global + spatial adaptive modulation
+  - Top-K sparse routing for competitive selection
 
-- **Lightweight Design**
-  - Parameter budget < 1M
-  - Operator pool built from efficient local operators
+- **Lightweight & Efficient**
+  - < 1M parameters
+  - Depthwise / separable operators
+  - No ImageNet pretraining required
 
-- **Official BSDS500 Evaluation**
-  - MATLAB **BSDSBench** (`edgesEvalDir`, `edgesEvalImg`)
-  - Metrics: **ODS / OIS / AP**
-  - Parallel evaluation via `fevalDistr (parfor)`
-  - Fully automated from Python (no manual MATLAB interaction)
+- **High-Quality Edge Maps**
+  - Clean, thin, and continuous edges
+  - Texture suppression without harming recall
+
+- **Full BSDS500 Pipeline**
+  - Training → Export → Evaluation
+  - CUDA-accelerated ODS / OIS / AP evaluation
 
 ---
 
-## 📁 Repository Structure
+## 📁 Project Structure
 
-```text
-DMOR-Edge
-├── dataset/
-│   └── BSDS500/
-│       ├── data/                 # Official BSDS500 data (images, groundTruth)
-│       └── README.md
-├── models/
-│   ├── dmor.py                   # Dynamic Modulated Operator Router
-│   ├── operators.py              # Lightweight operator pool
-│   └── net.py                    # Backbone + DMOR + edge head
-├── pipelines/
-│   └── run_bsds500_pipeline.py   # One-shot BSDS500 evaluation pipeline
-├── scripts/
-│   ├── bsds_train.py             # Training script
-│   ├── bsds_export.py            # Export predictions to PNG
-│   ├── ablate_topk.py            # Top-K routing ablation
-│   └── summarize_runs.py         # Result summarization
-├── tools/
-│   ├── BSDSbench/                # Official BSDS500 MATLAB benchmark
-│   ├── pdollar_toolbox/          # Piotr Dollar MATLAB toolbox
-│   └── eval_bsds500_official.m   # Auto-generated MATLAB eval script
-├── README.md
-└── LICENSE
+```
+DMOR-EDGE/
+├─ dataset/
+│  └─ BSDS500/
+│     ├─ data/
+│     │  ├─ images/
+│     │  │  ├─ train/
+│     │  │  ├─ val/
+│     │  │  └─ test/
+│     │  └─ groundTruth/
+│     │     ├─ train/
+│     │     ├─ val/
+│     │     └─ test/
+│     └─ ucm2/                  # (optional) original BSDS tools
+│
+├─ models/
+│  ├─ dmor.py                   # Dynamic Modulated Operator Router
+│  ├─ operators.py              # Edge-sensitive lightweight operators
+│  ├─ net.py                    # DMOR-Edge network definition
+│  ├─ loss.py                   # Balanced BCE / Dice / Hybrid losses
+│  └─ __init__.py
+│
+├─ scripts/
+│  ├─ bsds_train.py             # Training script
+│  ├─ bsds_export.py            # Export edge maps (PNG)
+│  └─ test_dmor.py              # Quick sanity / debug test
+│
+├─ pipelines/
+│  └─ eval_bsds500.py           # ODS / OIS / AP evaluation (CUDA)
+│
+├─ outputs/
+│  └─ BSDS500/
+│     └─ DMOR/
+│        ├─ ckpt/               # Trained checkpoints
+│        └─ test_png/           # Exported edge maps
+│
+├─ LICENSE
+└─ README.md
 ```
 
 ---
 
-## 🚀 Quick Start
-
-### 1. Environment
+## ⚙️ Environment
 
 - Python ≥ 3.8
-- PyTorch ≥ 1.10
-- MATLAB **R2020+**
-  - **Image Processing Toolbox** (required for `bwmorph`)
-  - Parallel Computing Toolbox (optional, for `parfor`)
+- PyTorch ≥ 1.12
+- CUDA ≥ 11.6 (recommended)
+- OpenCV, NumPy, SciPy
 
----
-
-### 2. BSDS500 Dataset
-
-Place the BSDS500 dataset in the following structure:
-
-```text
-dataset/BSDS500/data/
-├── images/
-│   ├── train/
-│   ├── val/
-│   └── test/
-└── groundTruth/
-    ├── train/
-    ├── val/
-    └── test/
-```
-
----
-
-### 3. Training (optional)
+Install dependencies (example):
 
 ```bash
-python scripts/bsds_train.py
+pip install torch torchvision opencv-python numpy scipy
 ```
 
 ---
 
-### 4. Export Predictions
+## 🚀 Training (BSDS500)
 
-Export edge maps as PNG files for official evaluation:
+Train DMOR-EDGE from scratch:
 
 ```bash
-python scripts/bsds_export.py
+python scripts/bsds_train.py \
+  --data_root dataset/BSDS500/data \
+  --out_dir outputs/BSDS500/DMOR \
+  --ckpt_dir outputs/BSDS500/DMOR/ckpt \
+  --device cuda \
+  --amp
 ```
 
-This will generate a directory such as:
-
-```text
-outputs/BSDS500/DMOR/test_png/
-```
-
----
-
-## 📊 Official BSDS500 Evaluation
-
-This project uses the **official BSDS500 MATLAB benchmark (BSDSBench)**.
-
-### Evaluation Protocol
-
-- Evaluator: `edgesEvalDir.m`, `edgesEvalImg.m`
-- Metrics: **ODS / OIS / AP**
-- Default settings:
-  - `thin = 1`
-  - `maxDist = 0.0075`
-  - `thrs = 99`
-- Parallel execution via `fevalDistr (parfor)`
-
-### One-shot Evaluation (Recommended)
-
-```bash
-python pipelines/run_bsds500_pipeline.py   --repo_root <path-to-DMOR-Edge>   --bsds_root <path-to-BSDS500/data>   --matlab "<path-to-matlab.exe>"   --pred_dir <prediction_png_dir>   --out_dir <output_dir>   --eval_type parfor
-```
-
-> **Note**
-> - MATLAB **Image Processing Toolbox** is required.
-> - Use `--eval_type local` if Parallel Computing Toolbox is unavailable.
-
-Evaluation results will be saved to:
-
-```text
-outputs/BSDS500/DMOR/eval_official/
-```
-
----
-
-## 🧪 Ablation & Analysis
-
-- **Top-K Routing Ablation**
-  ```bash
-  python scripts/ablate_topk.py
+- Best checkpoint is saved automatically as:
   ```
-
-- **Result Summary**
-  ```bash
-  python scripts/summarize_runs.py
+  outputs/BSDS500/DMOR/ckpt/dmor_best.pth
   ```
 
 ---
 
-## 📝 Development Log
+## 🖼️ Export Edge Maps
 
-- **2026-02**
-  - Finalized BSDS500 official evaluation pipeline
-  - Verified MATLAB BSDSBench + `fevalDistr` integration
-  - Fixed path isolation and toolbox dependency issues
+Generate edge prediction PNGs from the trained model:
+
+```bash
+python scripts/bsds_export.py \
+  --checkpoint outputs/BSDS500/DMOR/ckpt/dmor_best.pth \
+  --input_dir dataset/BSDS500/data/images/test \
+  --output_dir outputs/BSDS500/DMOR/test_png \
+  --device cuda \
+  --router_mode dmor \
+  --topk 2 \
+  --channels 32
+```
+
+Output images are normalized, clipped, and suitable for official evaluation.
 
 ---
 
-## 📦 Datasets and Third-Party Components (Attribution)
+## 📊 Evaluation (ODS / OIS / AP)
 
-This repository contains **non-original** components for research reproducibility:
+Evaluate exported edge maps on BSDS500:
 
-### BSDS500 Dataset
-- Name: Berkeley Segmentation Dataset and Benchmark (BSDS500)
-- Purpose: Edge detection evaluation (ODS / OIS / AP)
-- Source: Berkeley Vision Group (official BSDS resources)
+```bash
+python pipelines/eval_bsds500.py \
+  --pred_dir outputs/BSDS500/DMOR/test_png \
+  --gt_dir dataset/BSDS500/data/groundTruth/test \
+  --device cuda
+```
 
-### MATLAB BSDSBench (Official Evaluation Code)
-- Purpose: Official BSDS500 evaluation (`edgesEvalDir`, `edgesEvalImg`, etc.)
-- Source: Provided by the BSDS authors / Berkeley Vision Group
+Example output:
 
-### Piotr Dollár MATLAB Toolbox
-- Purpose: Utility toolbox required by BSDSBench (`fevalDistr`, etc.)
-- Author: Piotr Dollár
+```
+ODS: 0.8076 at threshold 0.64
+OIS: 0.8157
+AP : 0.8507
+Precision: 0.7708, Recall: 0.8482
+```
 
-All datasets and third-party code remain the property of their respective owners.
-They are included here for **research and reproducibility**. If any licensing terms
-require additional attribution or redistribution restrictions, please refer to the
-original sources and licenses shipped with those materials.
+---
 
-## 📄 License
+## 🧠 Method Overview
 
-This project is released under the **MIT License**.
+DMOR-EDGE models **edge detection as operator selection**, not fixed convolution stacks.
+
+- Multiple lightweight operators capture:
+  - Difference / contrast
+  - Directional structure
+  - Multi-scale context
+  - Noise suppression
+
+- A **dynamic router** assigns weights:
+  - Global (image-level)
+  - Spatial (pixel-level)
+
+- **Top-K routing** enforces competition:
+  - Sharper edges
+  - Less texture noise
+  - Better interpretability
+
+---
+
+## 📌 Research Notes
+
+- Designed for **ablation-friendly experiments**
+- Easy to extend with new operators
+- Routing weights can be visualized for analysis
+- Suitable for BSDS500 / BIPED / NYUD
+
+---
+
+## 📜 License
+
+This project is released under the MIT License.
+
+---
+
+## ✨ Acknowledgement
+
+This project is inspired by:
+- Biological vision mechanisms (X/Y/W pathways)
+- Lightweight edge detection research (PiDiNet, XYW-Net)
+- Operator-space modeling and dynamic routing ideas
+
+If you use this code for research, please consider citing appropriately.

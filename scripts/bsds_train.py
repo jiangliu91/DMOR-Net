@@ -1,212 +1,202 @@
-# scripts/bsds_train.py
-"""
-BSDS500 training for DMOR-Edge (fixed-size batching).
-
-This file contains NO Windows-style backslashes in strings to avoid the
-common Python unicodeescape issue on Windows.
-
-Usage example (PowerShell or CMD, single line):
-  python -m scripts.bsds_train --bsds_root <BSDS500_ROOT> --out_root <OUT_ROOT> --epochs 1 --batch 4 --img_size 320 --backbone lite --router dmor --topk 2 --amp
-"""
 import argparse
-import time
+import sys
 import random
 from pathlib import Path
 
-import cv2
 import numpy as np
 import torch
-import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
-from scipy.io import loadmat
+from torch.utils.data import DataLoader, Dataset
+from torch.cuda.amp import GradScaler, autocast
+
+ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(ROOT))
 
 from models.net import DMOREdgeNet
+from models.loss import HybridLoss
 
 
-def set_seed(seed: int):
+def set_seed(seed: int = 0):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
 
 
-def balanced_bce_with_logits(logits: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
-    pos = gt.sum().clamp_min(1.0)
-    neg = (1.0 - gt).sum().clamp_min(1.0)
-    pos_weight = (neg / pos).detach()
-    return F.binary_cross_entropy_with_logits(logits, gt, pos_weight=pos_weight)
-
-
-def find_gt_root(bsds_root: str) -> Path:
-    p1 = Path(bsds_root) / "groundTruth"
-    p2 = Path(bsds_root) / "ground_truth"
-    if p1.is_dir():
-        return p1
-    if p2.is_dir():
-        return p2
-    raise FileNotFoundError("Cannot find groundTruth or ground_truth under BSDS root.")
-
-
-def read_rgb(path: str) -> np.ndarray:
+def imread_rgb(path: str):
+    import cv2
     img = cv2.imread(path, cv2.IMREAD_COLOR)
     if img is None:
-        raise FileNotFoundError(path)
+        return None
     return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
 
-def read_gt_soft(mat_path: str) -> np.ndarray:
-    mat = loadmat(mat_path)
-    gts = mat["groundTruth"].ravel()
-    bmaps = []
-    for gt in gts:
-        try:
-            b = gt["Boundaries"][0, 0]
-        except Exception:
-            b = gt[0, 0]["Boundaries"][0, 0]
-        bmaps.append(b.astype(np.float32))
-    return np.clip(np.mean(np.stack(bmaps, 0), 0), 0, 1)
+def load_bsds_gt_from_mat(mat_path: str):
+    import scipy.io as sio
+    mat = sio.loadmat(mat_path)
+    gt = mat['groundTruth']
+    k = gt.shape[1] if gt.shape[0] == 1 else gt.shape[0]
+    edge = None
+    for i in range(k):
+        item = gt[0, i] if gt.shape[0] == 1 else gt[i, 0]
+        b = item['Boundaries'][0, 0].astype(np.float32)
+        edge = b if edge is None else np.maximum(edge, b)
+    return (edge > 0).astype(np.float32)
 
 
-def resize_pair(img: np.ndarray, gt: np.ndarray, size: int):
-    img_r = cv2.resize(img, (size, size), interpolation=cv2.INTER_LINEAR)
-    gt_r = cv2.resize(gt, (size, size), interpolation=cv2.INTER_NEAREST)
-    return img_r, gt_r
-
-
-class BSDS500(Dataset):
-    def __init__(self, root: str, split: str, img_size: int, hflip: bool = True):
+class BSDS500Dataset(Dataset):
+    def __init__(self, root: str, split: str, img_size: int = 320, augment: bool = True):
         self.root = Path(root)
         self.split = split
         self.img_size = int(img_size)
-        self.hflip = hflip
+        self.augment = bool(augment)
 
-        img_dir = self.root / "images" / split
-        gt_dir = find_gt_root(root) / split
+        self.img_dir = self.root / 'images' / split
+        self.gt_dir = self.root / 'groundTruth' / split
+        if not self.img_dir.is_dir():
+            raise FileNotFoundError(f'images dir not found: {self.img_dir}')
+        if not self.gt_dir.is_dir():
+            raise FileNotFoundError(f'groundTruth dir not found: {self.gt_dir}')
 
-        imgs = []
-        for ext in ("*.jpg", "*.jpeg", "*.png"):
-            imgs += list(img_dir.glob(ext))
-        self.imgs = sorted(imgs)
-        self.gts = [gt_dir / (p.stem + ".mat") for p in self.imgs]
+        exts = ('.jpg', '.png', '.jpeg', '.bmp')
+        imgs = [p for p in self.img_dir.iterdir() if p.suffix.lower() in exts]
+        imgs.sort()
 
-        if not self.imgs:
-            raise RuntimeError(f"No images found in {img_dir}")
+        self.pairs = []
+        for img_path in imgs:
+            gt_path = self.gt_dir / f'{img_path.stem}.mat'
+            if gt_path.is_file():
+                self.pairs.append((img_path, gt_path))
+        if len(self.pairs) == 0:
+            raise RuntimeError('No (image, gt) pairs found.')
 
     def __len__(self):
-        return len(self.imgs)
+        return len(self.pairs)
 
-    def __getitem__(self, idx):
-        img = read_rgb(str(self.imgs[idx]))
-        gt = read_gt_soft(str(self.gts[idx]))
+    def __getitem__(self, idx: int):
+        import cv2
+        img_path, gt_path = self.pairs[idx]
+        img = imread_rgb(str(img_path))
+        if img is None:
+            raise RuntimeError(f'Failed to read image: {img_path}')
+        gt = load_bsds_gt_from_mat(str(gt_path))
 
-        img, gt = resize_pair(img, gt, self.img_size)
+        img = cv2.resize(img, (self.img_size, self.img_size), interpolation=cv2.INTER_LINEAR)
+        gt = cv2.resize(gt, (self.img_size, self.img_size), interpolation=cv2.INTER_NEAREST)
 
-        if self.split == "train" and self.hflip and random.random() < 0.5:
-            img = img[:, ::-1].copy()
-            gt = gt[:, ::-1].copy()
+        if self.augment:
+            if random.random() < 0.5:
+                img = np.ascontiguousarray(img[:, ::-1, :])
+                gt = np.ascontiguousarray(gt[:, ::-1])
+            if random.random() < 0.5:
+                img = np.ascontiguousarray(img[::-1, :, :])
+                gt = np.ascontiguousarray(gt[::-1, :])
 
-        x = torch.from_numpy(img.astype(np.float32) / 255.0).permute(2, 0, 1)
-        y = torch.from_numpy(gt.astype(np.float32))[None, ...]
-        return x, y
+        img = img.astype(np.float32) / 255.0
+        img = img.transpose(2, 0, 1)
+        img_t = torch.from_numpy(img)
+        gt_t = torch.from_numpy(gt).unsqueeze(0)
+        return img_t, gt_t
+
+
+def freeze_bn(m):
+    if isinstance(m, torch.nn.BatchNorm2d):
+        m.eval()
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--bsds_root", type=str, required=True)
-    ap.add_argument("--out_root", type=str, required=True)
-
-    ap.add_argument("--epochs", type=int, default=1)
-    ap.add_argument("--batch", type=int, default=4)
-    ap.add_argument("--img_size", type=int, default=320)
-    ap.add_argument("--lr", type=float, default=1e-3)
-
-    ap.add_argument("--channels", type=int, default=32)
-    ap.add_argument("--backbone", type=str, default="lite", choices=["tiny", "lite"])
-    ap.add_argument("--router", type=str, default="dmor", choices=["dmor", "uniform"])
-    ap.add_argument("--topk", type=int, default=2)
-    ap.add_argument("--temperature", type=float, default=1.0)
-
-    ap.add_argument("--num_workers", type=int, default=0)  # safest on Windows
-    ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--amp", action="store_true")
-    args = ap.parse_args()
+    p = argparse.ArgumentParser('BSDS500 DMOR training (fixed & self-contained)')
+    p.add_argument('--data_root', required=True)
+    p.add_argument('--out_dir', required=True)
+    p.add_argument('--ckpt_dir', required=True)
+    p.add_argument('--device', default='cuda', choices=['cuda', 'cpu'])
+    p.add_argument('--epochs', type=int, default=10)
+    p.add_argument('--batch', type=int, default=4)
+    p.add_argument('--lr', type=float, default=1e-3)
+    p.add_argument('--img_size', type=int, default=320)
+    p.add_argument('--num_workers', type=int, default=4)
+    p.add_argument('--amp', action='store_true')
+    p.add_argument('--seed', type=int, default=0)
+    p.add_argument('--freeze_bn', action='store_true')
+    p.add_argument('--channels', type=int, default=32)
+    p.add_argument('--topk', type=int, default=2)
+    p.add_argument('--router_mode', default='dmor', choices=['dmor', 'uniform'])
+    p.add_argument('--temperature', type=float, default=1.0)
+    p.add_argument('--backbone', default='lite', choices=['tiny', 'lite'])
+    p.add_argument('--bce_weight', type=float, default=1.0)
+    p.add_argument('--dice_weight', type=float, default=0.5)
+    args = p.parse_args()
 
     set_seed(args.seed)
+    device = torch.device('cuda' if (args.device == 'cuda' and torch.cuda.is_available()) else 'cpu')
+    print(f'Using device: {device}')
+    Path(args.out_dir).mkdir(parents=True, exist_ok=True)
+    Path(args.ckpt_dir).mkdir(parents=True, exist_ok=True)
 
-    device = "cuda" 
-    out_root = Path(args.out_root)
-    ckpt_dir = out_root / "ckpt"
-    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    print('Initializing datasets...')
+    train_ds = BSDS500Dataset(args.data_root, 'train', img_size=args.img_size, augment=True)
+    val_ds = BSDS500Dataset(args.data_root, 'val', img_size=args.img_size, augment=False)
 
-    train_ds = BSDS500(args.bsds_root, "train", img_size=args.img_size, hflip=True)
-    val_ds   = BSDS500(args.bsds_root, "val",   img_size=args.img_size, hflip=False)
+    train_loader = DataLoader(train_ds, batch_size=args.batch, shuffle=True, drop_last=True,
+                              num_workers=args.num_workers, pin_memory=True)
+    val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=args.num_workers, pin_memory=True)
 
-    train_loader = DataLoader(
-        train_ds, batch_size=args.batch, shuffle=True,
-        num_workers=args.num_workers, pin_memory=(device == "cuda"), drop_last=True
-    )
-    val_loader = DataLoader(
-        val_ds, batch_size=1, shuffle=False,
-        num_workers=0, pin_memory=(device == "cuda")
-    )
+    print(f'Building model: backbone={args.backbone}, router={args.router_mode}, topk={args.topk}')
+    model = DMOREdgeNet(channels=args.channels, topk=args.topk, router_mode=args.router_mode,
+                        temperature=args.temperature, backbone=args.backbone).to(device)
 
-    model = DMOREdgeNet(
-        channels=args.channels,
-        topk=args.topk if args.router == "dmor" else 0,
-        router_mode=args.router,
-        temperature=args.temperature,
-        backbone=args.backbone,
-    ).to(device)
-
-    opt = torch.optim.Adam(model.parameters(), lr=args.lr)
-
-    scaler = torch.cuda.amp.GradScaler(enabled=(args.amp and device == "cuda"))
-
-    best_val = 1e9
-    print(f"[INFO] device={device} train={len(train_ds)} val={len(val_ds)} img_size={args.img_size}")
+    criterion = HybridLoss(bce_weight=args.bce_weight, dice_weight=args.dice_weight).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    scaler = GradScaler(enabled=args.amp)
+    best_val = float('inf')
 
     for epoch in range(1, args.epochs + 1):
         model.train()
-        t0 = time.time()
+        if args.freeze_bn:
+            model.apply(freeze_bn)
+
         tr_loss = 0.0
-
-        for x, y in train_loader:
-            x = x.to(device, non_blocking=True)
-            y = y.to(device, non_blocking=True)
-
-            opt.zero_grad(set_to_none=True)
-            with torch.cuda.amp.autocast(enabled=(args.amp and device == "cuda")):
-                logits = model(x)
-                loss = balanced_bce_with_logits(logits, y)
-
+        for imgs, gts in train_loader:
+            imgs = imgs.to(device, non_blocking=True)
+            gts = gts.to(device, non_blocking=True)
+            optimizer.zero_grad(set_to_none=True)
+            with autocast(enabled=args.amp):
+                preds = model(imgs)
+                loss = criterion(preds, gts)
             scaler.scale(loss).backward()
-            scaler.step(opt)
+            scaler.step(optimizer)
             scaler.update()
             tr_loss += float(loss.item())
-
-        tr_loss /= max(len(train_loader), 1)
+        tr_loss /= max(1, len(train_loader))
 
         model.eval()
-        vloss = 0.0
+        va_loss = 0.0
         with torch.no_grad():
-            for x, y in val_loader:
-                x = x.to(device, non_blocking=True)
-                y = y.to(device, non_blocking=True)
-                vloss += float(balanced_bce_with_logits(model(x), y).item())
-        vloss /= max(len(val_loader), 1)
+            for imgs, gts in val_loader:
+                imgs = imgs.to(device, non_blocking=True)
+                gts = gts.to(device, non_blocking=True)
+                with autocast(enabled=args.amp):
+                    preds = model(imgs)
+                    loss = criterion(preds, gts)
+                va_loss += float(loss.item())
+        va_loss /= max(1, len(val_loader))
 
-        print(f"[EPOCH {epoch}] train_loss={tr_loss:.4f} val_loss={vloss:.4f} time={time.time()-t0:.1f}s")
+        print(f'Epoch [{epoch}/{args.epochs}] | Train: {tr_loss:.4f} | Val: {va_loss:.4f}')
 
-        torch.save({"model": model.state_dict(), "epoch": epoch, "vloss": vloss, "args": vars(args)}, ckpt_dir / "dmor_last.pth")
-        if vloss < best_val:
-            best_val = vloss
-            torch.save({"model": model.state_dict(), "epoch": epoch, "vloss": vloss, "args": vars(args)}, ckpt_dir / "dmor_best.pth")
-            print("  ✓ saved best")
+        ckpt = {
+            'epoch': epoch,
+            'state_dict': model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            'val_loss': va_loss,
+            'args': vars(args),
+        }
+        torch.save(ckpt, Path(args.ckpt_dir) / 'dmor_last.pth')
+        if va_loss < best_val:
+            best_val = va_loss
+            torch.save(ckpt, Path(args.ckpt_dir) / 'dmor_best.pth')
+            print(f'  >>> Saved dmor_best.pth (val_loss={best_val:.4f})')
 
-    print("✓ training finished")
+    print('Training complete.')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

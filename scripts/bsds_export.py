@@ -1,84 +1,130 @@
-# scripts/bsds_export.py
-# BSDS500 test export -> PNG (for official BSDS evaluation)
-# This version is CONDA-friendly and supports env vars so you don't have to keep editing the file.
-
-import os, sys
-# Ensure repo root is on PYTHONPATH so `import models` works no matter where this script is launched from.
-REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-if REPO_ROOT not in sys.path:
-    sys.path.insert(0, REPO_ROOT)
-
 import os
-from pathlib import Path
-
+import sys
 import cv2
+import argparse
 import numpy as np
 import torch
+import torch.nn.functional as F
+
+# ------------------------------
+# FIX: ensure project root in PYTHONPATH
+# ------------------------------
+CUR_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJ_ROOT = os.path.abspath(os.path.join(CUR_DIR, ".."))
+if PROJ_ROOT not in sys.path:
+    sys.path.insert(0, PROJ_ROOT)
 
 from models.net import DMOREdgeNet
 
 
-def _env(key: str, default: str) -> str:
-    v = os.environ.get(key, "").strip()
-    return v if v else default
+def _read_rgb_float01(path: str) -> np.ndarray:
+    img_bgr = cv2.imread(path, cv2.IMREAD_COLOR)
+    if img_bgr is None:
+        raise FileNotFoundError(f"Failed to read: {path}")
+    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+    return img_rgb.astype(np.float32) / 255.0  # match bsds_train.py
 
 
-def load_image_rgb(path: str) -> torch.Tensor:
-    img = cv2.imread(path, cv2.IMREAD_COLOR)
-    if img is None:
-        raise FileNotFoundError(path)
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-    return torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0)  # [1,3,H,W]
+def _to_tensor(img_rgb01: np.ndarray, device: torch.device) -> torch.Tensor:
+    # [H,W,3] -> [1,3,H,W]
+    return torch.from_numpy(img_rgb01).permute(2, 0, 1).unsqueeze(0).to(device)
 
 
-@torch.no_grad()
+def _minmax_uint8(x: np.ndarray, eps: float = 1e-6) -> np.ndarray:
+    # contrast stretch for visibility/quality; does NOT change ordering much
+    x = x.astype(np.float32)
+    lo, hi = float(x.min()), float(x.max())
+    if hi - lo < eps:
+        return (x * 255.0).clip(0, 255).astype(np.uint8)
+    y = (x - lo) / (hi - lo)
+    return (y * 255.0).clip(0, 255).astype(np.uint8)
+
+
+def infer_one(model, img_path: str, device: torch.device, scales=(1.0,), flip_tta: bool = True) -> np.ndarray:
+    img = _read_rgb_float01(img_path)
+    H, W, _ = img.shape
+
+    acc = torch.zeros((1, 1, H, W), device=device)
+    cnt = 0
+
+    for s in scales:
+        hs, ws = max(1, int(H * s)), max(1, int(W * s))
+        img_s = cv2.resize(img, (ws, hs), interpolation=cv2.INTER_LINEAR)
+
+        x = _to_tensor(img_s, device)
+
+        with torch.no_grad():
+            logits = model(x)             # expects logits
+            prob = torch.sigmoid(logits)  # [1,1,hs,ws]
+        prob = F.interpolate(prob, size=(H, W), mode="bilinear", align_corners=False)
+        acc += prob
+        cnt += 1
+
+        if flip_tta:
+            x_f = torch.flip(x, dims=[3])
+            with torch.no_grad():
+                logits_f = model(x_f)
+                prob_f = torch.sigmoid(logits_f)
+            prob_f = torch.flip(prob_f, dims=[3])
+            prob_f = F.interpolate(prob_f, size=(H, W), mode="bilinear", align_corners=False)
+            acc += prob_f
+            cnt += 1
+
+    prob = (acc / max(1, cnt)).squeeze().clamp(0, 1).cpu().numpy()  # [H,W]
+    return prob
+
+
 def main():
-    # You can override these via environment variables:
-    #   BSDS_ROOT, OUT_DIR, CKPT_PATH, BACKBONE, TOPK, ROUTER_MODE, TEMPERATURE
-    bsds_root = _env("BSDS_ROOT", r"D:\Users\JJzhe\code\github\dataset\BSDS500")
-    out_dir   = _env("OUT_DIR",   r"D:\Users\JJzhe\code\github\outputs\BSDS500\DMOR\test_png")
-    ckpt_path = _env("CKPT_PATH", "")  # optional
+    p = argparse.ArgumentParser()
+    p.add_argument("--input_dir", required=True)
+    p.add_argument("--output_dir", required=True)
+    p.add_argument("--checkpoint", required=True)
+    p.add_argument("--channels", type=int, default=32)
+    p.add_argument("--topk", type=int, default=2)
+    p.add_argument("--router_mode", type=str, default="dmor", choices=["dmor", "uniform"])
+    p.add_argument("--temperature", type=float, default=1.0)
+    p.add_argument("--mst", action="store_true", help="multi-scale + flip tta")
+    p.add_argument("--no_flip", action="store_true")
+    p.add_argument("--stretch", action="store_true", help="min-max stretch before saving (often improves visibility)")
+    args = p.parse_args()
 
-    backbone  = _env("BACKBONE", "lite")
-    topk      = int(_env("TOPK", "2"))
-    router    = _env("ROUTER_MODE", "dmor")
-    temp      = float(_env("TEMPERATURE", "1.0"))
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    img_dir = os.path.join(bsds_root, "images", "test")
-    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    model = DMOREdgeNet(
+        channels=args.channels,
+        topk=args.topk,
+        router_mode=args.router_mode,
+        temperature=args.temperature,
+        backbone="lite",
+    ).to(device)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    model = DMOREdgeNet(channels=32, topk=topk, router_mode=router, temperature=temp, backbone=backbone).to(device)
-
-    if ckpt_path:
-        state = torch.load(ckpt_path, map_location="cpu")
-        if isinstance(state, dict) and "model" in state:
-            model.load_state_dict(state["model"], strict=False)
-        elif isinstance(state, dict) and "state_dict" in state:
-            model.load_state_dict(state["state_dict"], strict=False)
-        else:
-            model.load_state_dict(state, strict=False)
-
+    print(f"Loading checkpoint: {args.checkpoint}")
+    ckpt = torch.load(args.checkpoint, map_location=device)
+    sd = ckpt.get("state_dict", ckpt)
+    sd = {k.replace("module.", ""): v for k, v in sd.items()}
+    model.load_state_dict(sd, strict=True)
     model.eval()
 
-    exts = {".jpg", ".png", ".jpeg"}
-    img_paths = [p for p in sorted(Path(img_dir).iterdir()) if p.suffix.lower() in exts]
-    if not img_paths:
-        raise SystemExit(f"[ERROR] no images under: {img_dir}")
+    os.makedirs(args.output_dir, exist_ok=True)
 
-    print(f"[INFO] device={device} | backbone={backbone} topk={topk} router={router} temp={temp}")
-    print(f"[INFO] exporting {len(img_paths)} images -> {out_dir}")
+    imgs = sorted([f for f in os.listdir(args.input_dir) if f.lower().endswith((".png", ".jpg", ".jpeg", ".bmp"))])
+    print(f"Found {len(imgs)} images. MST={args.mst} flip={not args.no_flip}")
 
-    for p in img_paths:
-        x = load_image_rgb(str(p)).to(device)
-        logits = model(x)  # [1,1,H,W]
-        prob = torch.sigmoid(logits)[0, 0].detach().cpu().numpy()
+    scales = (0.5, 1.0, 1.5) if args.mst else (1.0,)
 
-        pred = (prob * 255.0).clip(0, 255).astype(np.uint8)
-        cv2.imwrite(os.path.join(out_dir, p.stem + ".png"), pred)
+    for i, name in enumerate(imgs, 1):
+        prob = infer_one(model, os.path.join(args.input_dir, name), device, scales=scales, flip_tta=not args.no_flip)
+        if args.stretch:
+            out = _minmax_uint8(prob)
+        else:
+            out = (prob * 255.0).clip(0, 255).astype(np.uint8)
 
-    print("✅ export done")
+        cv2.imwrite(os.path.join(args.output_dir, os.path.splitext(name)[0] + ".png"), out)
+
+        if i % 10 == 0 or i == len(imgs):
+            print(f"Processed {i}/{len(imgs)}")
+
+    print("Export done.")
 
 
 if __name__ == "__main__":
