@@ -73,13 +73,14 @@ class BSDS500Dataset(Dataset):
         return len(self.pairs)
 
     def __getitem__(self, idx: int):
-        import cv2
         img_path, gt_path = self.pairs[idx]
         img = imread_rgb(str(img_path))
         if img is None:
             raise RuntimeError(f'Failed to read image: {img_path}')
         gt = load_bsds_gt_from_mat(str(gt_path))
 
+        import cv2
+        # resize to fixed square for stable batching
         img = cv2.resize(img, (self.img_size, self.img_size), interpolation=cv2.INTER_LINEAR)
         gt = cv2.resize(gt, (self.img_size, self.img_size), interpolation=cv2.INTER_NEAREST)
 
@@ -95,6 +96,7 @@ class BSDS500Dataset(Dataset):
         img = img.transpose(2, 0, 1)
         img_t = torch.from_numpy(img)
         gt_t = torch.from_numpy(gt).unsqueeze(0)
+
         return img_t, gt_t
 
 
@@ -109,10 +111,10 @@ def main():
     p.add_argument('--out_dir', required=True)
     p.add_argument('--ckpt_dir', required=True)
     p.add_argument('--device', default='cuda', choices=['cuda', 'cpu'])
-    p.add_argument('--epochs', type=int, default=10)
+    p.add_argument('--epochs', type=int, default=100)
     p.add_argument('--batch', type=int, default=4)
     p.add_argument('--lr', type=float, default=1e-3)
-    p.add_argument('--img_size', type=int, default=320)
+    p.add_argument('--img_size', type=int, default=512)
     p.add_argument('--num_workers', type=int, default=4)
     p.add_argument('--amp', action='store_true')
     p.add_argument('--seed', type=int, default=0)
