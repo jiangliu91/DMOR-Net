@@ -1,4 +1,4 @@
-
+﻿
 # eval_bsds500.py (with JSON saving)
 import os
 import cv2
@@ -124,12 +124,105 @@ if __name__ == "__main__":
     ap.add_argument("--gt_dir", required=True)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--save_dir", default=r"D:\Users\JJzhe\code\github\outputs\BSDS500\DMOR\eval_official_gpu")
+
+    # 鏂板鍙傛暟锛堜笉浼氬奖鍝嶆棫娴佺▼锛?    ap.add_argument("--ckpt", default=None, help="Optional: model checkpoint for complexity profiling")
+    ap.add_argument("--ckpt", default=None, help="(optional) ckpt path for Params/FLOPs/FPS")
+    ap.add_argument("--img_size", type=int, default=512)
+    ap.add_argument("--channels", type=int, default=32)
+    ap.add_argument("--topk", type=int, default=2)
+
     args = ap.parse_args()
 
     os.makedirs(args.save_dir, exist_ok=True)
 
     with torch.no_grad():
         res = run_eval(args.pred_dir, args.gt_dir, device=args.device)
+        if args.ckpt:
+            try:
+                import time
+                from thop import profile
+                from models.net import DMOREdgeNet
+
+                dev = torch.device(args.device if (args.device == "cuda" and torch.cuda.is_available()) else "cpu")
+                model = DMOREdgeNet(channels=args.channels, topk=args.topk).to(dev).eval()
+
+                sd = torch.load(args.ckpt, map_location="cpu")
+                if isinstance(sd, dict) and "state_dict" in sd:
+                    sd = sd["state_dict"]
+                model.load_state_dict(sd, strict=False)
+
+                # 1: Params
+                params = sum(p.numel() for p in model.parameters())
+                res["Params_M"] = params / 1e6
+
+                # 2: FLOPs
+                x = torch.randn(1, 3, args.img_size, args.img_size, device=dev)
+                flops, _ = profile(model, inputs=(x,), verbose=False)
+                res["FLOPs_G"] = flops / 1e9
+
+                # 3: FPS
+                warmup, iters = 10, 50
+                with torch.no_grad():
+                    for _ in range(warmup):
+                        _ = model(x)
+                    if dev.type == "cuda":
+                        torch.cuda.synchronize()
+                    t0 = time.time()
+                    for _ in range(iters):
+                        _ = model(x)
+                    if dev.type == "cuda":
+                        torch.cuda.synchronize()
+                    t1 = time.time()
+                res["FPS"] = iters / max(1e-9, (t1 - t0))
+
+            except Exception as e:
+                print("⚠ Complexity profiling skipped:", e)
+
+
+    # ----------------------------
+    # 鏂板锛歅arams / FLOPs / FPS
+    # ----------------------------
+    if args.ckpt is not None:
+        try:
+            from models.net import DMOREdgeNet as EdgeNet
+            from thop import profile
+
+            device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+            model = DMOREdgeNet(channels=args.channels, topk=args.topk)
+            sd = torch.load(args.ckpt, map_location="cpu")
+            if isinstance(sd, dict) and "state_dict" in sd:
+                sd = sd["state_dict"]
+            model.load_state_dict(sd, strict=False)
+            model.to(device).eval()
+
+            # Params
+            total_params = sum(p.numel() for p in model.parameters())
+            res["Params_M"] = total_params / 1e6
+
+            # FLOPs
+            dummy = torch.randn(1, 3, args.img_size, args.img_size).to(device)
+            flops, _ = profile(model, inputs=(dummy,), verbose=False)
+            res["FLOPs_G"] = flops / 1e9
+
+            # FPS
+            warmup = 10
+            test_iter = 50
+            for _ in range(warmup):
+                _ = model(dummy)
+            torch.cuda.synchronize()
+            import time
+            start = time.time()
+            for _ in range(test_iter):
+                _ = model(dummy)
+            torch.cuda.synchronize()
+            end = time.time()
+            fps = test_iter / (end - start)
+            res["FPS"] = fps
+
+        except Exception as e:
+            print("Complexity profiling skipped:", e)
+
+    # ----------------------------
 
     print("------------ Evaluation Result ------------")
     for k, v in res.items():

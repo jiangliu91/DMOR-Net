@@ -1,199 +1,295 @@
+# DMOR-Edge
 
-# DMOR-EDGE
-**Dynamic Modulated Operator Router for Lightweight Edge Detection**
+## Dynamic Modulated Operator Router for Lightweight Edge Detection
 
-DMOR-EDGE is a lightweight, biologically-inspired edge detection framework that introduces
-**dynamic operator routing** into edge detection.  
-Instead of relying on fixed parallel pathways, DMOR-EDGE adaptively selects and fuses
-multiple lightweight edge-sensitive operators based on image content.
+------------------------------------------------------------------------
 
-The project is designed for **clean research experiments**, **stable training**, and **reproducible BSDS500 evaluation**.
+# 1. Abstract
 
----
+DMOR-Edge is a lightweight, operator-space dynamic routing framework for
+edge detection. Instead of statically stacking convolutional operators,
+DMOR introduces a **Dynamic Modulated Operator Router (DMOR)** that
+performs input-adaptive selection and spatially-varying fusion of
+complementary lightweight operators.
 
-## 🔥 Highlights
+The framework is designed to:
 
-- **Dynamic Modulated Operator Router (DMOR)**
-  - Operator-space modeling instead of fixed pathways
-  - Global + spatial adaptive modulation
-  - Top-K sparse routing for competitive selection
+-   Preserve fine object boundaries
+-   Suppress high-frequency texture noise
+-   Maintain extremely low parameter count
+-   Enable controllable sparsity via Top-K routing
+-   Achieve competitive ODS/OIS under \<1M parameters
 
-- **Lightweight & Efficient**
-  - < 1M parameters
-  - Depthwise / separable operators
-  - No ImageNet pretraining required
+This repository contains the full implementation, training scripts,
+ablation studies, and efficiency profiling tools.
 
-- **High-Quality Edge Maps**
-  - Clean, thin, and continuous edges
-  - Texture suppression without harming recall
+------------------------------------------------------------------------
 
-- **Full BSDS500 Pipeline**
-  - Training → Export → Evaluation
-  - CUDA-accelerated ODS / OIS / AP evaluation
+# 2. Motivation
 
----
+Traditional lightweight edge detectors rely on:
 
-## 📁 Project Structure
+-   Static convolution stacking
+-   Fixed receptive field composition
+-   Uniform operator contribution
 
-```
-DMOR-EDGE/
-├─ dataset/
-│  └─ BSDS500/
-│     ├─ data/
-│     │  ├─ images/
-│     │  │  ├─ train/
-│     │  │  ├─ val/
-│     │  │  └─ test/
-│     │  └─ groundTruth/
-│     │     ├─ train/
-│     │     ├─ val/
-│     │     └─ test/
-│     └─ ucm2/                  # (optional) original BSDS tools
-│
-├─ models/
-│  ├─ dmor.py                   # Dynamic Modulated Operator Router
-│  ├─ operators.py              # Edge-sensitive lightweight operators
-│  ├─ net.py                    # DMOR-Edge network definition
-│  ├─ loss.py                   # Balanced BCE / Dice / Hybrid losses
-│  └─ __init__.py
-│
-├─ scripts/
-│  ├─ bsds_train.py             # Training script
-│  ├─ bsds_export.py            # Export edge maps (PNG)
-│  └─ test_dmor.py              # Quick sanity / debug test
-│
-├─ pipelines/
-│  └─ eval_bsds500.py           # ODS / OIS / AP evaluation (CUDA)
-│
-├─ outputs/
-│  └─ BSDS500/
-│     └─ DMOR/
-│        ├─ ckpt/               # Trained checkpoints
-│        └─ test_png/           # Exported edge maps
-│
-├─ LICENSE
-└─ README.md
-```
+However, edges in natural images are highly heterogeneous:
 
----
+-   Structural boundaries require large receptive fields
+-   Texture edges require suppression
+-   Thin contours require precise gradient modeling
 
-## ⚙️ Environment
+A static operator combination is suboptimal.
 
-- Python ≥ 3.8
-- PyTorch ≥ 1.12
-- CUDA ≥ 11.6 (recommended)
-- OpenCV, NumPy, SciPy
+We instead formulate edge detection as an **operator routing problem**.
 
-Install dependencies (example):
+------------------------------------------------------------------------
 
-```bash
-pip install torch torchvision opencv-python numpy scipy
-```
+# 3. Method
 
----
+## 3.1 Overview
 
-## 🚀 Training (BSDS500)
+Pipeline:
 
-Train DMOR-EDGE from scratch:
+Input → Lightweight Encoder → DMOR Blocks → Multi-scale Decoder → Edge
+Prediction
 
-```bash
-python scripts/bsds_train.py \
-  --data_root dataset/BSDS500/data \
-  --out_dir outputs/BSDS500/DMOR \
-  --ckpt_dir outputs/BSDS500/DMOR/ckpt \
-  --device cuda \
-  --amp
-```
+The key innovation lies in the DMOR block.
 
-- Best checkpoint is saved automatically as:
-  ```
-  outputs/BSDS500/DMOR/ckpt/dmor_best.pth
-  ```
+------------------------------------------------------------------------
 
----
+## 3.2 Operator Space Modeling
 
-## 🖼️ Export Edge Maps
+Given feature tensor:
 
-Generate edge prediction PNGs from the trained model:
+    F ∈ ℝ^{C×H×W}
 
-```bash
-python scripts/bsds_export.py \
-  --checkpoint outputs/BSDS500/DMOR/ckpt/dmor_best.pth \
-  --input_dir dataset/BSDS500/data/images/test \
-  --output_dir outputs/BSDS500/DMOR/test_png \
-  --device cuda \
-  --router_mode dmor \
-  --topk 2 \
-  --channels 32
-```
+We define a set of lightweight operators:
 
-Output images are normalized, clipped, and suitable for official evaluation.
+    O = {O1, O2, ..., ON}
 
----
+Each operator is computationally cheap (e.g., DWConv, dilated DWConv,
+Laplacian-style filters).
 
-## 📊 Evaluation (ODS / OIS / AP)
+Parallel operator responses:
 
-Evaluate exported edge maps on BSDS500:
+    Fi = Oi(F)
 
-```bash
-python pipelines/eval_bsds500.py \
-  --pred_dir outputs/BSDS500/DMOR/test_png \
-  --gt_dir dataset/BSDS500/data/groundTruth/test \
-  --device cuda
-```
+------------------------------------------------------------------------
 
-Example output:
+## 3.3 Dynamic Routing
 
-```
-ODS: 0.8076 at threshold 0.64
-OIS: 0.8157
-AP : 0.8507
-Precision: 0.7708, Recall: 0.8482
-```
+A routing network predicts spatial weights:
 
----
+    W = Softmax( R(F) / T )
 
-## 🧠 Method Overview
+Where:
 
-DMOR-EDGE models **edge detection as operator selection**, not fixed convolution stacks.
+-   R(·) is a lightweight gating network
+-   T is temperature parameter
 
-- Multiple lightweight operators capture:
-  - Difference / contrast
-  - Directional structure
-  - Multi-scale context
-  - Noise suppression
+Spatially varying weights:
 
-- A **dynamic router** assigns weights:
-  - Global (image-level)
-  - Spatial (pixel-level)
+    W ∈ ℝ^{N×H×W}
 
-- **Top-K routing** enforces competition:
-  - Sharper edges
-  - Less texture noise
-  - Better interpretability
+Final aggregation:
 
----
+    F_out = Σ_i Wi ⊙ Fi
 
-## 📌 Research Notes
+------------------------------------------------------------------------
 
-- Designed for **ablation-friendly experiments**
-- Easy to extend with new operators
-- Routing weights can be visualized for analysis
-- Suitable for BSDS500 / BIPED / NYUD
+## 3.4 Top-K Sparse Routing
 
----
+To encourage competition and reduce redundancy:
 
-## 📜 License
+For each spatial location:
 
-This project is released under the MIT License.
+    Keep only K largest Wi
+    Set others to zero
 
----
+This introduces:
 
-## ✨ Acknowledgement
+-   Implicit sparsity
+-   Improved interpretability
+-   Reduced effective computation
 
-This project is inspired by:
-- Biological vision mechanisms (X/Y/W pathways)
-- Lightweight edge detection research (PiDiNet, XYW-Net)
-- Operator-space modeling and dynamic routing ideas
+------------------------------------------------------------------------
 
-If you use this code for research, please consider citing appropriately.
+## 3.5 Dual-Level Modulation
+
+Global Modulation: - Channel attention over operators
+
+Spatial Modulation: - Pixel-wise routing mask
+
+This dual modulation enables both:
+
+-   Global structural bias
+-   Local adaptive selection
+
+------------------------------------------------------------------------
+
+## 3.6 Decoder
+
+Lightweight multi-scale decoder:
+
+-   Bilinear upsampling
+-   Feature fusion
+-   1×1 prediction head
+
+Loss:
+
+    L = λ1 * BCE + λ2 * Dice
+
+------------------------------------------------------------------------
+
+# 4. Repository Structure
+
+    DMOR-Edge/
+    ├── dataset/
+    │   ├── BSDS500/
+    │   ├── BIPEDv2/
+    │   └── NYUDv2/
+    │
+    ├── models/
+    │   ├── dmor.py
+    │   ├── backbone.py
+    │   └── ...
+    │
+    ├── scripts/
+    │   ├── bsds_train.py
+    │   ├── bsds_export.py
+    │   ├── biped_train.py
+    │   ├── biped_export.py
+    │   ├── nyudv2_train.py
+    │   ├── nyudv2_export.py
+    │   ├── test_dmor.py
+    │   └── _dataset_common.py
+    │
+    ├── pipelines/
+    │   ├── eval_bsds500.py
+    │   ├── eval_biped.py
+    │   ├── eval_nyudv2.py
+    │   └── eval_generic_png.py
+    │
+    ├── test/
+    │   ├── run_ablation_bsds500_suite.py
+    │   ├── run_alpha_sensitivity_bsds500.py
+    │   ├── run_param_budget_scaling_bsds500.py
+    │   ├── run_routing_strategy_bsds500.py
+    │   ├── run_topk_tradeoff_bsds500.py
+    │   └── _overlay_dmor*
+
+------------------------------------------------------------------------
+
+# 5. Datasets
+
+## 5.1 BSDS500
+
+Download:
+http://www.eecs.berkeley.edu/Research/Projects/CS/vision/grouping/resources.html
+
+Structure:
+
+dataset/BSDS500/data/ ├── images/ └── groundTruth/
+
+------------------------------------------------------------------------
+
+## 5.2 BIPEDv2
+
+Download: https://github.com/xavysp/BIPED
+
+Expected:
+
+dataset/BIPEDv2/ ├── imgs/ └── edge_maps/
+
+------------------------------------------------------------------------
+
+## 5.3 NYUDv2
+
+Download: https://cs.nyu.edu/\~silberman/datasets/nyu_depth_v2.html
+
+Place .mat in:
+
+dataset/NYUDv2/
+
+Preprocess:
+
+    python scripts/nyudv2_export.py
+
+------------------------------------------------------------------------
+
+# 6. Training
+
+Example (BSDS500):
+
+    python scripts/bsds_train.py \
+        --data_root dataset/BSDS500/data \
+        --device cuda \
+        --epochs 200 \
+        --batch 4 \
+        --img_size 512 \
+        --router_mode dmor \
+        --topk 2
+
+------------------------------------------------------------------------
+
+# 7. Evaluation
+
+    python pipelines/eval_bsds500.py \
+        --pred_dir outputs/... \
+        --gt_dir dataset/BSDS500/data/groundTruth/test
+
+Metrics:
+
+-   ODS
+-   OIS
+-   AP
+-   R50
+
+------------------------------------------------------------------------
+
+# 8. Ablation Studies
+
+Located in:
+
+    test/
+
+Includes:
+
+-   Top-K tradeoff
+-   Routing strategy
+-   Parameter scaling
+-   Alpha sensitivity
+
+------------------------------------------------------------------------
+
+# 9. Efficiency Profiling
+
+    python scripts/test_dmor.py
+
+Outputs:
+
+-   Params (M)
+-   FLOPs (G)
+-   FPS
+
+------------------------------------------------------------------------
+
+# 10. Reproducibility
+
+-   Fixed random seeds
+-   Official evaluation scripts
+-   Structured output directory
+-   Fully self-contained training pipelines
+
+------------------------------------------------------------------------
+
+# 11. License
+
+MIT License
+
+------------------------------------------------------------------------
+
+# 12. Citation
+
+Dynamic Modulated Operator Router for Lightweight Edge Detection
