@@ -49,18 +49,37 @@ class DMOR(nn.Module):
         if self.num_ops <= 0:
             raise ValueError("Operator pool is empty.")
 
-        if self.cfg.router_mode == "dmor":
+        if self.cfg.router_mode in ("dmor", "global"):
             self.global_router = GlobalRouter(self.channels, self.num_ops)
+
+        if self.cfg.router_mode in ("dmor", "spatial"):
             self.spatial_router = SpatialRouter(self.channels, self.num_ops)
 
     def _compute_weights(self, x: torch.Tensor) -> torch.Tensor:
         # return [B,N,H,W]
+
         if self.cfg.router_mode == "uniform":
             b, _, h, w = x.shape
-            return torch.full((b, self.num_ops, h, w), 1.0 / self.num_ops, device=x.device, dtype=x.dtype)
+            return torch.full(
+                (b, self.num_ops, h, w),
+                1.0 / self.num_ops,
+                device=x.device,
+                dtype=x.dtype
+            )
 
-        g_logits = self.global_router(x)  # [B,N,1,1]
-        s_logits = self.spatial_router(x) # [B,N,H,W]
+        if self.cfg.router_mode == "global":
+            g_logits = self.global_router(x)  # [B,N,1,1]
+            g_logits = g_logits / max(self.cfg.temperature, self.cfg.eps)
+            g = torch.softmax(g_logits, dim=1)
+            return g.expand(-1, -1, x.shape[2], x.shape[3])
+        if self.cfg.router_mode == "spatial":
+            s_logits = self.spatial_router(x)  # [B,N,H,W]
+            s_logits = s_logits / max(self.cfg.temperature, self.cfg.eps)
+            return torch.softmax(s_logits, dim=1)
+
+        # original dmor (global + spatial)
+        g_logits = self.global_router(x)
+        s_logits = self.spatial_router(x)
         logits = (g_logits + s_logits) / max(self.cfg.temperature, self.cfg.eps)
         return torch.softmax(logits, dim=1)
 

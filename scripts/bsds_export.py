@@ -81,7 +81,7 @@ def main():
     p.add_argument("--checkpoint", required=True)
     p.add_argument("--channels", type=int, default=32)
     p.add_argument("--topk", type=int, default=2)
-    p.add_argument("--router_mode", type=str, default="dmor", choices=["dmor", "uniform"])
+    p.add_argument("--router_mode", type=str, default="dmor", choices=["dmor", "uniform","global", "spatial"])
     p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("--mst", action="store_true", help="multi-scale + flip tta")
     p.add_argument("--no_flip", action="store_true")

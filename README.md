@@ -293,3 +293,106 @@ MIT License
 # 12. Citation
 
 Dynamic Modulated Operator Router for Lightweight Edge Detection
+
+------------------------------------------------------------------------
+
+# 13. Updated Repository Notes (New Additions)
+
+The current repository additionally supports:
+
+-   Master experiment runner (multi-dataset automation)
+-   Alpha overlay routing experiments
+-   Automatic checkpoint resolution
+-   Integrated complexity profiling during evaluation
+-   Unified BSDS experiment suite execution
+
+------------------------------------------------------------------------
+
+# 14. Master Runner (Full Automation)
+
+You can run all BSDS experiment suites and multi-dataset pipelines
+using:
+
+    python test/run_everything_dmor_suite.py
+
+Optional arguments:
+
+    --alphas 0.0,0.5,1.0
+    --variants tiny,small
+    --channels_map tiny:16,small:32
+    --device cuda
+    --epochs 200
+    --batch 4
+
+This script sequentially executes:
+
+-   Top-K tradeoff
+-   Routing strategy comparison
+-   Alpha sensitivity
+-   Parameter budget scaling
+-   Full ablation suite
+
+------------------------------------------------------------------------
+
+# 15. Alpha Sensitivity (Overlay Routing)
+
+Alpha-based modulation experiments are isolated under:
+
+    test/_overlay_dmor/
+
+The overlay mechanism ensures:
+
+-   Core DMOR logic in models/dmor.py remains untouched
+-   Alpha experiments do not modify the base architecture
+-   Clean separation between research variants and main model
+
+------------------------------------------------------------------------
+
+# 16. Integrated Complexity Profiling
+
+Efficiency metrics (Params / FLOPs / FPS) can be computed during
+evaluation by passing:
+
+    --ckpt path/to/best.pth
+    --img_size 512
+    --channels 32
+    --topk 2
+
+Example:
+
+    python -m pipelines.eval_bsds500         --pred_dir outputs/...         --gt_dir dataset/BSDS500/data/groundTruth/test         --ckpt outputs/.../best.pth         --img_size 512         --channels 32         --topk 2
+
+Additional metrics automatically added:
+
+-   Params_M
+-   FLOPs_G
+-   FPS
+
+------------------------------------------------------------------------
+
+# 17. Output Structure Convention
+
+All experiment outputs follow:
+
+    outputs/
+        ├── BSDS500/
+        ├── BIPEDv2/
+        └── NYUDv2/
+
+Each dataset contains:
+
+    ckpt/
+    test_png/
+    eval_official_gpu/
+
+Experiment summaries are saved as JSON for reproducibility.
+
+------------------------------------------------------------------------
+
+# 18. Engineering Principles (Extended)
+
+-   Core model files are never deleted --- only extended
+-   Experiment logic isolated in test/
+-   Overlay modules do not pollute base model
+-   All experiment runners use subprocess with explicit cwd
+-   Strict fail-fast behavior for reproducibility

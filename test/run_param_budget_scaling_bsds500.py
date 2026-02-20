@@ -31,9 +31,9 @@ from pathlib import Path
 from typing import Dict, List
 
 
-def _run(cmd: List[str], env: Dict[str, str] | None = None) -> None:
+def _run(cmd: List[str], env: Dict[str, str], cwd: Path) -> None:
     print("[CMD]", " ".join(cmd), flush=True)
-    subprocess.check_call(cmd, env=env)
+    subprocess.check_call(cmd, cwd=str(cwd))
 
 
 def _read_metrics_json(path: Path) -> Dict:
@@ -99,7 +99,7 @@ def main() -> None:
         ckpt_dir = out_dir / "ckpt"
         test_png = out_dir / "test_png"
         eval_dir = out_dir / "eval_official_gpu"
-        ckpt_path = ckpt_dir / "best.pth"
+        ckpt_path = ckpt_dir / "dmor_best.pth"
 
         print("\n" + "=" * 40)
         print(f"Running: {tag}")
@@ -113,7 +113,7 @@ def main() -> None:
         _run(
             [
                 sys.executable,
-                str(repo_root / "scripts" / "bsds_train.py"),
+                "-m", "scripts.bsds_train",
                 "--data_root",
                 str(data_root),
                 "--out_dir",
@@ -143,42 +143,33 @@ def main() -> None:
                 "--backbone",
                 args.backbone,
                 "--amp",
-            ]
+            ],
+            env=os.environ.copy(),
+            cwd=repo_root,
         )
 
         # 2) Export test_png
         _run(
             [
                 sys.executable,
-                str(repo_root / "scripts" / "bsds_export.py"),
-                "--data_root",
-                str(data_root),
-                "--ckpt",
-                str(ckpt_path),
-                "--out_dir",
-                str(test_png),
-                "--device",
-                args.device,
-                "--img_size",
-                str(args.img_size),
-                "--channels",
-                str(channels),
-                "--topk",
-                str(args.topk),
-                "--router_mode",
-                args.router_mode,
-                "--temperature",
-                str(args.temperature),
-                "--backbone",
-                args.backbone,
-            ]
+                "-m", "scripts.bsds_export",
+                "--input_dir", str(data_root / "images" / "test"),
+                "--output_dir", str(test_png),
+                "--checkpoint", str(ckpt_path),
+                "--channels", str(channels),
+                "--topk", str(args.topk),
+                "--router_mode", args.router_mode,
+                "--temperature", str(args.temperature),
+            ],
+            env=os.environ.copy(),
+            cwd=repo_root,
         )
 
         # 3) Eval (ODS/OIS/AP + Params/FLOPs/FPS)
         _run(
             [
                 sys.executable,
-                str(repo_root / "pipelines" / "eval_bsds500.py"),
+                "-m", "pipelines.eval_bsds500",
                 "--pred_dir",
                 str(test_png),
                 "--gt_dir",
@@ -195,7 +186,9 @@ def main() -> None:
                 str(args.topk),
                 "--ckpt",
                 str(ckpt_path),
-            ]
+            ],
+            env=os.environ.copy(),
+            cwd=repo_root,
         )
 
         m = _read_metrics_json(eval_dir / "metrics.json")

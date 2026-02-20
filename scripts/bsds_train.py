@@ -121,7 +121,7 @@ def main():
     p.add_argument('--freeze_bn', action='store_true')
     p.add_argument('--channels', type=int, default=32)
     p.add_argument('--topk', type=int, default=2)
-    p.add_argument('--router_mode', default='dmor', choices=['dmor', 'uniform'])
+    p.add_argument('--router_mode', default='dmor', choices=['dmor', 'uniform','global', 'spatial'])
     p.add_argument('--temperature', type=float, default=1.0)
     p.add_argument('--backbone', default='lite', choices=['tiny', 'lite'])
     p.add_argument('--bce_weight', type=float, default=1.0)

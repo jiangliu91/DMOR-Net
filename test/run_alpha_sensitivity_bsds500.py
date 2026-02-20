@@ -135,9 +135,9 @@ def _ensure_overlay(repo_root: Path) -> Path:
     return overlay_root
 
 
-def _run(cmd: List[str], env: Dict[str, str]) -> None:
+def _run(cmd: List[str], env: Dict[str, str], cwd: Path) -> None:
     print("[CMD]", " ".join(cmd), flush=True)
-    subprocess.check_call(cmd, env=env)
+    subprocess.check_call(cmd, env=env, cwd=str(cwd))
 
 
 def _read_metrics_json(path: Path) -> Dict:
@@ -194,116 +194,81 @@ def main() -> None:
         ckpt_dir = out_dir / "ckpt"
         test_png = out_dir / "test_png"
         eval_dir = out_dir / "eval_official_gpu"
-        ckpt_path = ckpt_dir / "best.pth"
-
-        print("\n" + "=" * 40)
-        print(f"Running: {tag}")
-        print(f"alpha: {a}")
-        print(f"out_dir: {out_dir}")
-        print("=" * 40, flush=True)
+        ckpt_path = ckpt_dir / "dmor_best.pth"
 
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        # 1) Train
+        print("\n" + "=" * 60)
+        print(f"Running: {tag}")
+        print("=" * 60)
+
+        # Train
         _run(
             [
                 sys.executable,
-                str(repo_root / "scripts" / "bsds_train.py"),
-                "--data_root",
-                str(data_root),
-                "--out_dir",
-                str(out_dir),
-                "--ckpt_dir",
-                str(ckpt_dir),
-                "--device",
-                args.device,
-                "--epochs",
-                str(args.epochs),
-                "--batch",
-                str(args.batch),
-                "--lr",
-                str(args.lr),
-                "--img_size",
-                str(args.img_size),
-                "--num_workers",
-                str(args.num_workers),
-                "--channels",
-                str(args.channels),
-                "--topk",
-                str(args.topk),
-                "--router_mode",
-                args.router_mode,
-                "--temperature",
-                str(args.temperature),
-                "--backbone",
-                args.backbone,
+                "-m", "scripts.bsds_train",
+                "--data_root", str(data_root),
+                "--out_dir", str(out_dir),
+                "--ckpt_dir", str(ckpt_dir),
+                "--device", args.device,
+                "--epochs", str(args.epochs),
+                "--batch", str(args.batch),
+                "--lr", str(args.lr),
+                "--img_size", str(args.img_size),
+                "--num_workers", str(args.num_workers),
+                "--channels", str(args.channels),
+                "--topk", str(args.topk),
+                "--router_mode", args.router_mode,
+                "--temperature", str(args.temperature),
+                "--backbone", args.backbone,
                 "--amp",
             ],
             env=env,
+            cwd=repo_root,
         )
 
-        # 2) Export test_png
+        # Export
         _run(
             [
                 sys.executable,
-                str(repo_root / "scripts" / "bsds_export.py"),
-                "--data_root",
-                str(data_root),
-                "--ckpt",
-                str(ckpt_path),
-                "--out_dir",
-                str(test_png),
-                "--device",
-                args.device,
-                "--img_size",
-                str(args.img_size),
-                "--channels",
-                str(args.channels),
-                "--topk",
-                str(args.topk),
-                "--router_mode",
-                args.router_mode,
-                "--temperature",
-                str(args.temperature),
-                "--backbone",
-                args.backbone,
+                "-m", "scripts.bsds_export",
+                "--input_dir", str(data_root / "images" / "test"),
+                "--output_dir", str(test_png),
+                "--checkpoint", str(ckpt_path),
+                "--channels", str(args.channels),
+                "--topk", str(args.topk),
+                "--router_mode", args.router_mode,
+                "--temperature", str(args.temperature),
             ],
             env=env,
+            cwd=repo_root,
         )
 
-        # 3) Eval
+        # Eval
         _run(
             [
                 sys.executable,
-                str(repo_root / "pipelines" / "eval_bsds500.py"),
-                "--pred_dir",
-                str(test_png),
-                "--gt_dir",
-                str(data_root / "groundTruth" / "test"),
-                "--device",
-                args.device,
-                "--save_dir",
-                str(eval_dir),
-                "--img_size",
-                str(args.img_size),
-                "--channels",
-                str(args.channels),
-                "--topk",
-                str(args.topk),
-                "--ckpt",
-                str(ckpt_path),
+                "-m", "pipelines.eval_bsds500",
+                "--pred_dir", str(test_png),
+                "--gt_dir", str(data_root / "groundTruth" / "test"),
+                "--device", args.device,
+                "--save_dir", str(eval_dir),
+                "--ckpt", str(ckpt_path),
+                "--img_size", str(args.img_size),
+                "--channels", str(args.channels),
+                "--topk", str(args.topk),
             ],
             env=env,
+            cwd=repo_root,
         )
 
         m = _read_metrics_json(eval_dir / "metrics.json")
-        m.update({"alpha": a, "tag": tag})
+        m.update({"alpha": a})
         summary.append(m)
 
-    out_summary = outputs_root / f"{args.exp_prefix}_alpha_sensitivity_summary.json"
-    out_summary.write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    print(f"\nSaved summary to: {out_summary}")
-
+    summary_path = outputs_root / f"{args.exp_prefix}_alpha_sensitivity_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    print(f"\nSaved summary to: {summary_path}")
 
 if __name__ == "__main__":
     main()
