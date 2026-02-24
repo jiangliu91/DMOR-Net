@@ -114,7 +114,6 @@ def main():
     p.add_argument('--epochs', type=int, default=100)
     p.add_argument('--batch', type=int, default=4)
     p.add_argument('--lr', type=float, default=1e-3)
-    p.add_argument('--weight_decay', type=float, default=1e-4) # [NEW] Added Weight Decay param
     p.add_argument('--img_size', type=int, default=512)
     p.add_argument('--num_workers', type=int, default=4)
     p.add_argument('--amp', action='store_true')
@@ -127,11 +126,8 @@ def main():
     p.add_argument('--backbone', default='lite', choices=['tiny', 'lite'])
     p.add_argument('--bce_weight', type=float, default=1.0)
     p.add_argument('--dice_weight', type=float, default=0.5)
-    
-    # ====== [新增参数：用于接收上一个K的模型权重] ======
-    p.add_argument('--pretrained', type=str, default='', help='Path to baseline checkpoint for fine-tuning')
-    # ===================================================
-
+    p.add_argument("--enabled_ops", nargs="+", type=int, default=None)
+    p.add_argument("--pool_mode", default="dmor")
     args = p.parse_args()
 
     set_seed(args.seed)
@@ -150,25 +146,11 @@ def main():
 
     print(f'Building model: backbone={args.backbone}, router={args.router_mode}, topk={args.topk}')
     model = DMOREdgeNet(channels=args.channels, topk=args.topk, router_mode=args.router_mode,
-                        temperature=args.temperature, backbone=args.backbone).to(device)
-
-    # ====== [新增代码：核心预训练加载逻辑] ======
-    if args.pretrained and Path(args.pretrained).exists():
-        print(f"\n[INFO] Loading pretrained baseline weights from: {args.pretrained}")
-        ckpt = torch.load(args.pretrained, map_location=device)
-        state_dict = ckpt.get('state_dict', ckpt.get('model', ckpt))
-        model.load_state_dict(state_dict, strict=False)
-        print("[INFO] Successfully loaded pretrained weights for fine-tuning.\n")
-    # ============================================
+                        temperature=args.temperature, backbone=args.backbone, enabled_ops=args.enabled_ops,
+                        pool_mode=args.pool_mode,).to(device)
 
     criterion = HybridLoss(bce_weight=args.bce_weight, dice_weight=args.dice_weight).to(device)
-    
-    # [NEW] Use AdamW instead of Adam, and pass weight_decay
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    
-    # [NEW] Cosine Annealing LR Scheduler to smooth late-stage training for large models
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
-    
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     scaler = GradScaler(enabled=args.amp)
     best_val = float('inf')
 
@@ -202,12 +184,8 @@ def main():
                     loss = criterion(preds, gts)
                 va_loss += float(loss.item())
         va_loss /= max(1, len(val_loader))
-        
-        # [NEW] Step the learning rate scheduler
-        current_lr = optimizer.param_groups[0]['lr']
-        scheduler.step()
 
-        print(f'Epoch [{epoch}/{args.epochs}] | LR: {current_lr:.6f} | Train: {tr_loss:.4f} | Val: {va_loss:.4f}')
+        print(f'Epoch [{epoch}/{args.epochs}] | Train: {tr_loss:.4f} | Val: {va_loss:.4f}')
 
         ckpt = {
             'epoch': epoch,

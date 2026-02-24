@@ -66,11 +66,11 @@ class DMOREdgeNet(nn.Module):
         super().__init__()
         self.backbone = MultiScaleBackbone(channels)
 
-        self.dmor1 = DMOR(channels, topk=topk, router_mode=router_mode, temperature=temperature,
+        self.dmor1 = DMOR(channels, topk=topk, temperature=temperature,
                           enabled_ops=enabled_ops, pool_mode=pool_mode)
-        self.dmor2 = DMOR(channels * 2, topk=topk, router_mode=router_mode, temperature=temperature,
+        self.dmor2 = DMOR(channels * 2, topk=topk, temperature=temperature,
                           enabled_ops=enabled_ops, pool_mode=pool_mode)
-        self.dmor3 = DMOR(channels * 4, topk=topk, router_mode=router_mode, temperature=temperature,
+        self.dmor3 = DMOR(channels * 4, topk=topk, temperature=temperature,
                           enabled_ops=enabled_ops, pool_mode=pool_mode)
 
         self.side1 = nn.Conv2d(channels, 1, 1)

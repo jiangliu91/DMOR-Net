@@ -28,26 +28,44 @@ from pathlib import Path
 
 overlay = Path(r'{overlay_root}')
 
-def inject(module_name, file_name):
+def inject_model(module_name, file_name):
     spec = importlib.util.spec_from_file_location(
         module_name,
         overlay / "models" / file_name
     )
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
     sys.modules[module_name] = module
+    spec.loader.exec_module(module)
 
-# 强制覆盖三个模块
-inject("models.operators", "operators.py")
-inject("models.dmor", "dmor.py")
-inject("models.net", "net.py")
+def inject_script(module_name, file_name):
+    spec = importlib.util.spec_from_file_location(
+        module_name,
+        overlay / "scripts" / file_name
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
 
+# 强制覆盖 models
+inject_model("models.operators", "operators.py")
+inject_model("models.dmor", "dmor.py")
+inject_model("models.net", "net.py")
+inject_model("models.loss", "loss.py")
+
+# 强制覆盖 scripts
+inject_script("scripts.bsds_train", "bsds_train.py")
+inject_script("scripts.bsds_export", "bsds_export.py")
+
+import sys
 import runpy
+
+# 关键修复：把命令行参数传进去
+sys.argv = [r'{script_path}'] + {args_list}
+
 runpy.run_path(r'{script_path}', run_name="__main__")
 """
 
-    return ["python", "-c", injection_code] + args_list
-
+    return ["python", "-c", injection_code]
 
 # ------------------------------------------------------------
 # Main
@@ -70,6 +88,7 @@ def main():
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--ckpt_name", default="dmor_best.pth")
     parser.add_argument("--mst", action="store_true")
+    parser.add_argument("--num_workers", type=int, default=4)
     args = parser.parse_args()
 
     repo_root = Path(args.repo_root).resolve()
@@ -83,12 +102,15 @@ def main():
             "请先运行原始 ablation 脚本生成 overlay。"
         )
 
-    def run_one(tag: str):
+    def run_one(tag: str, enabled_ops=None, pool_mode="dmor"):
 
         out_dir = outputs_root / tag
         ckpt_dir = out_dir / "ckpt"
         pred_dir = out_dir / "test_png"
         eval_dir = out_dir / "eval_official_gpu"
+        
+        # 🟢 修复 1：明确指定 checkpoint 的完整路径
+        ckpt_path = ckpt_dir / args.ckpt_name
 
         ckpt_dir.mkdir(parents=True, exist_ok=True)
         pred_dir.mkdir(parents=True, exist_ok=True)
@@ -100,49 +122,60 @@ def main():
         print("==============================")
 
         # ---------------- TRAIN ----------------
-        train_cmd = build_launch_command(
-            repo_root / "scripts/bsds_train.py",
-            overlay,
-            [
-                "--data_root", str(data_root),
-                "--out_dir", str(out_dir),
-                "--ckpt_dir", str(ckpt_dir),
-                "--device", args.device,
-                "--epochs", str(args.epochs),
-                "--batch", str(args.batch),
-                "--lr", str(args.lr),
-                "--img_size", str(args.img_size),
-                "--channels", str(args.channels),
-                "--topk", str(args.topk),
-                "--router_mode", args.router_mode,
-                "--temperature", str(args.temperature),
-                "--backbone", "lite",
-                "--amp",
-            ],
-        )
-
-        subprocess.run(train_cmd, cwd=repo_root, check=True)
+        train_args = [
+            "--data_root", str(data_root),
+            "--out_dir", str(out_dir),
+            "--ckpt_dir", str(ckpt_dir),
+            "--device", args.device,
+            "--epochs", str(args.epochs),
+            "--batch", str(args.batch),
+            "--lr", str(args.lr),
+            "--img_size", str(args.img_size),
+            "--channels", str(args.channels),
+            "--topk", str(args.topk),
+            "--router_mode", args.router_mode,
+            "--temperature", str(args.temperature),
+            "--num_workers", str(args.num_workers),
+            "--backbone", "lite",
+            "--amp",
+        ]
+        
+        if enabled_ops is not None:
+            train_args.append("--enabled_ops")
+            train_args.extend([str(op) for op in enabled_ops])
+        train_args.extend(["--pool_mode", pool_mode])
+        
+        # 🟢 修复 2：实际构建命令并拉起训练进程
+        train_script = overlay / "scripts" / "bsds_train.py"
+        train_cmd = build_launch_command(train_script, overlay, train_args)
+        print(f"[{tag}] Starting Training...")
+        subprocess.run(train_cmd, check=True)
 
         # ---------------- EXPORT ----------------
-        ckpt_path = ckpt_dir / args.ckpt_name
-        if not ckpt_path.exists():
-            raise RuntimeError(f"Checkpoint not found: {ckpt_path}")
+        export_args = [
+            "--input_dir", str(data_root / "images/test"),
+            "--output_dir", str(pred_dir),
+            "--checkpoint", str(ckpt_path),
+            "--channels", str(args.channels),
+            "--topk", str(args.topk),
+            "--router_mode", args.router_mode,
+            "--temperature", str(args.temperature),
+        ]
 
-        export_cmd = build_launch_command(
-            repo_root / "scripts/bsds_export.py",
-            overlay,
-            [
-                "--input_dir", str(data_root / "images/test"),
-                "--output_dir", str(pred_dir),
-                "--checkpoint", str(ckpt_path),
-                "--channels", str(args.channels),
-                "--topk", str(args.topk),
-                "--router_mode", args.router_mode,
-                "--temperature", str(args.temperature),
-            ] + (["--mst"] if args.mst else []),
-        )
+        if enabled_ops is not None:
+            export_args.append("--enabled_ops")
+            export_args.extend([str(op) for op in enabled_ops])
+        export_args.extend(["--pool_mode", pool_mode])
 
-        subprocess.run(export_cmd, cwd=repo_root, check=True)
+        # 🟢 修复：透传 --mst 参数，确保公平对比
+        if args.mst:
+            export_args.append("--mst")
+
+        # 🟢 修复 3：实际构建命令并拉起导出进程
+        export_script = overlay / "scripts" / "bsds_export.py"
+        export_cmd = build_launch_command(export_script, overlay, export_args)
+        print(f"[{tag}] Starting Export...")
+        subprocess.run(export_cmd, check=True)
 
         # ---------------- EVAL ----------------
         eval_cmd = [
@@ -154,13 +187,26 @@ def main():
             "--save_dir", str(eval_dir),
         ]
 
+        print(f"[{tag}] Starting Evaluation...")
         subprocess.run(eval_cmd, cwd=repo_root, check=True)
 
-    # 示例：跑一个
-    run_one(f"{args.exp_prefix}_B1_noO1")
+    experiments = [
+    ("B1_noO1", [1,2,3,4], "dmor"),
+    ("B2_noO2", [0,2,3,4], "dmor"),
+    ("B3_noO3", [0,1,3,4], "dmor"),
+    ("B4_noO4", [0,1,2,4], "dmor"),
+    ("B5_noO5", [0,1,2,3], "dmor"),
+    ("B6_all3x3", None, "all3x3"),
+    ]
 
-    print("\n✔ Ablation finished (overlay enforced).")
+    for name, enabled, mode in experiments:
+        run_one(
+            tag=f"{args.exp_prefix}_{name}",
+            enabled_ops=enabled,
+            pool_mode=mode
+        )
 
+    print("\n✔ All ablations finished (overlay enforced).")
 
 if __name__ == "__main__":
     main()
