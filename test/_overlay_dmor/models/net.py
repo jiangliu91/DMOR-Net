@@ -23,8 +23,9 @@ class LiteBlock(nn.Module):
         super().__init__()
         self.in_c = int(in_c)
         self.out_c = int(out_c)
+        # 维持空间盲状态，仅使用 1x1
         self.block = nn.Sequential(
-            nn.Conv2d(in_c, in_c, 3, 1, 1, groups=in_c, bias=False),
+            nn.Conv2d(in_c, in_c, 1, 1, 0, groups=1, bias=False),
             nn.BatchNorm2d(in_c),
             nn.ReLU(inplace=True),
             nn.Conv2d(in_c, out_c, 1, 1, 0, bias=False),

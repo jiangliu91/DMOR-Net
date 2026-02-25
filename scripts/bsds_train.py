@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torchvision.transforms as T
 from torch.utils.data import DataLoader, Dataset
 from torch.cuda.amp import GradScaler, autocast
 
@@ -68,6 +69,8 @@ class BSDS500Dataset(Dataset):
                 self.pairs.append((img_path, gt_path))
         if len(self.pairs) == 0:
             raise RuntimeError('No (image, gt) pairs found.')
+            
+        self.color_jitter = T.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1)
 
     def __len__(self):
         return len(self.pairs)
@@ -96,6 +99,9 @@ class BSDS500Dataset(Dataset):
         img = img.transpose(2, 0, 1)
         img_t = torch.from_numpy(img)
         gt_t = torch.from_numpy(gt).unsqueeze(0)
+        
+        if self.augment:
+            img_t = self.color_jitter(img_t)
 
         return img_t, gt_t
 
@@ -114,7 +120,7 @@ def main():
     p.add_argument('--epochs', type=int, default=100)
     p.add_argument('--batch', type=int, default=4)
     p.add_argument('--lr', type=float, default=1e-3)
-    p.add_argument('--weight_decay', type=float, default=1e-4) # [NEW] Added Weight Decay param
+    p.add_argument('--weight_decay', type=float, default=1e-4)
     p.add_argument('--img_size', type=int, default=512)
     p.add_argument('--num_workers', type=int, default=4)
     p.add_argument('--amp', action='store_true')
@@ -127,11 +133,6 @@ def main():
     p.add_argument('--backbone', default='lite', choices=['tiny', 'lite'])
     p.add_argument('--bce_weight', type=float, default=1.0)
     p.add_argument('--dice_weight', type=float, default=0.5)
-    
-    # ====== [新增参数：用于接收上一个K的模型权重] ======
-    p.add_argument('--pretrained', type=str, default='', help='Path to baseline checkpoint for fine-tuning')
-    # ===================================================
-
     args = p.parse_args()
 
     set_seed(args.seed)
@@ -152,21 +153,8 @@ def main():
     model = DMOREdgeNet(channels=args.channels, topk=args.topk, router_mode=args.router_mode,
                         temperature=args.temperature, backbone=args.backbone).to(device)
 
-    # ====== [新增代码：核心预训练加载逻辑] ======
-    if args.pretrained and Path(args.pretrained).exists():
-        print(f"\n[INFO] Loading pretrained baseline weights from: {args.pretrained}")
-        ckpt = torch.load(args.pretrained, map_location=device)
-        state_dict = ckpt.get('state_dict', ckpt.get('model', ckpt))
-        model.load_state_dict(state_dict, strict=False)
-        print("[INFO] Successfully loaded pretrained weights for fine-tuning.\n")
-    # ============================================
-
     criterion = HybridLoss(bce_weight=args.bce_weight, dice_weight=args.dice_weight).to(device)
-    
-    # [NEW] Use AdamW instead of Adam, and pass weight_decay
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    
-    # [NEW] Cosine Annealing LR Scheduler to smooth late-stage training for large models
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
     
     scaler = GradScaler(enabled=args.amp)
@@ -203,7 +191,6 @@ def main():
                 va_loss += float(loss.item())
         va_loss /= max(1, len(val_loader))
         
-        # [NEW] Step the learning rate scheduler
         current_lr = optimizer.param_groups[0]['lr']
         scheduler.step()
 

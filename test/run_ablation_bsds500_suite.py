@@ -21,52 +21,23 @@ from pathlib import Path
 # ------------------------------------------------------------
 
 def build_launch_command(script_path: Path, overlay_root: Path, args_list: list[str]):
-
+    repo_root = overlay_root.parent
+    
+    # 简化版注入：直接通过 sys.path 优先级让 Python 自己去加载 overlay 里的文件
     injection_code = f"""
-import importlib.util, sys
+import sys, os
 from pathlib import Path
 
-overlay = Path(r'{overlay_root}')
+# 🟢 终极路径优先级：强制让 overlay/models 文件夹排在最前面
+sys.path.insert(0, r'{repo_root}')
+sys.path.insert(0, r'{overlay_root}')
 
-def inject_model(module_name, file_name):
-    spec = importlib.util.spec_from_file_location(
-        module_name,
-        overlay / "models" / file_name
-    )
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-
-def inject_script(module_name, file_name):
-    spec = importlib.util.spec_from_file_location(
-        module_name,
-        overlay / "scripts" / file_name
-    )
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-
-# 强制覆盖 models
-inject_model("models.operators", "operators.py")
-inject_model("models.dmor", "dmor.py")
-inject_model("models.net", "net.py")
-inject_model("models.loss", "loss.py")
-
-# 强制覆盖 scripts
-inject_script("scripts.bsds_train", "bsds_train.py")
-inject_script("scripts.bsds_export", "bsds_export.py")
-
-import sys
 import runpy
-
-# 关键修复：把命令行参数传进去
 sys.argv = [r'{script_path}'] + {args_list}
-
-runpy.run_path(r'{script_path}', run_name="__main__")
+print(f"--- Subprocess training start ---")
+runpy.run_path(r'{script_path}', run_name='__main__')
 """
-
-    return ["python", "-c", injection_code]
-
+    return ["/root/miniconda3/envs/dmor/bin/python", "-c", injection_code]
 # ------------------------------------------------------------
 # Main
 # ------------------------------------------------------------
@@ -191,12 +162,12 @@ def main():
         subprocess.run(eval_cmd, cwd=repo_root, check=True)
 
     experiments = [
-    ("B1_noO1", [1,2,3,4], "dmor"),
-    ("B2_noO2", [0,2,3,4], "dmor"),
-    ("B3_noO3", [0,1,3,4], "dmor"),
-    ("B4_noO4", [0,1,2,4], "dmor"),
-    ("B5_noO5", [0,1,2,3], "dmor"),
-    ("B6_all3x3", None, "all3x3"),
+        ("B1_noO1", [1,2,3,4], "dmor"),
+        ("B2_noO2", [0,2,3,4], "dmor"),
+        ("B3_noO3", [0,1,3,4], "dmor"),
+        ("B4_noO4", [0,1,2,4], "dmor"),
+        ("B5_noO5", [0,1,2,3], "dmor"),
+        # ("B6_all3x3", None, "all3x3"),  # <-- 注释掉，保留战果
     ]
 
     for name, enabled, mode in experiments:
