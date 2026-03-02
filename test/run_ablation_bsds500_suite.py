@@ -162,12 +162,12 @@ def main():
         subprocess.run(eval_cmd, cwd=repo_root, check=True)
 
     experiments = [
-        ("B1_noO1", [1,2,3,4], "dmor"),
-        ("B2_noO2", [0,2,3,4], "dmor"),
-        ("B3_noO3", [0,1,3,4], "dmor"),
-        ("B4_noO4", [0,1,2,4], "dmor"),
-        ("B5_noO5", [0,1,2,3], "dmor"),
-        # ("B6_all3x3", None, "all3x3"),  # <-- 注释掉，保留战果
+        #("B1_noO1", [1,2,3,4], "dmor"),
+        #("B2_noO2", [0,2,3,4], "dmor"),
+        #("B3_noO3", [0,1,3,4], "dmor"),
+        #("B4_noO4", [0,1,2,4], "dmor"),
+        #("B5_noO5", [0,1,2,3], "dmor"),
+        ("B6_all3x3", None, "all3x3"),  # <-- 注释掉，保留战果
     ]
 
     for name, enabled, mode in experiments:

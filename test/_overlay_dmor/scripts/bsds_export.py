@@ -7,12 +7,15 @@ import torch
 import torch.nn.functional as F
 
 # ------------------------------
-# FIX: ensure project root in PYTHONPATH
+# FIX: force overlay models first
 # ------------------------------
 CUR_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJ_ROOT = os.path.abspath(os.path.join(CUR_DIR, ".."))
-if PROJ_ROOT not in sys.path:
-    sys.path.insert(0, PROJ_ROOT)
+OVERLAY_ROOT = os.path.join(PROJ_ROOT, "_overlay_dmor")
+
+# 关键：overlay 放最前
+sys.path.insert(0, OVERLAY_ROOT)
+sys.path.insert(0, PROJ_ROOT)
 
 from models.net import DMOREdgeNet
 
@@ -86,22 +89,22 @@ def main():
     p.add_argument("--mst", action="store_true", help="multi-scale + flip tta")
     p.add_argument("--no_flip", action="store_true")
     p.add_argument("--stretch", action="store_true", help="min-max stretch before saving (often improves visibility)")
+    p.add_argument("--backbone", type=str, default="lite")
     p.add_argument("--enabled_ops", nargs="+", type=int, default=None)
-    p.add_argument("--pool_mode", default="dmor")
+    p.add_argument("--pool_mode", type=str, default="dmor")
     args = p.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model = DMOREdgeNet(
-        channels=args.channels,
-        topk=args.topk,
-        router_mode=args.router_mode,
-        temperature=args.temperature,
-        backbone="lite",
-        enabled_ops=args.enabled_ops,
-        pool_mode=args.pool_mode,
-    ).to(device)
-
+    channels=args.channels,
+    topk=args.topk,
+    router_mode=args.router_mode,
+    temperature=args.temperature,
+    backbone="lite",
+    enabled_ops=args.enabled_ops,
+    pool_mode=args.pool_mode,
+).to(device)
     print(f"Loading checkpoint: {args.checkpoint}")
     ckpt = torch.load(args.checkpoint, map_location=device)
     sd = ckpt.get("state_dict", ckpt)

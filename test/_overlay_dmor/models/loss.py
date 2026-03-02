@@ -16,17 +16,14 @@ def _balanced_bce_one(logits: torch.Tensor, gt: torch.Tensor, eps: float = 1.0) 
     pos = gt_f.sum().clamp_min(eps)
     neg = (1.0 - gt_f).sum().clamp_min(eps)
 
-    # Proper class-balanced positive weight
     pos_weight = (neg / pos).detach().to(device=logits.device, dtype=logits.dtype)
 
-    bce = F.binary_cross_entropy_with_logits(
+    return F.binary_cross_entropy_with_logits(
         logits,
         gt_f,
         pos_weight=pos_weight,
         reduction="mean"
     )
-
-    return bce
 
 
 def balanced_bce_with_logits(preds, gt: torch.Tensor, eps: float = 1.0) -> torch.Tensor:
@@ -54,7 +51,7 @@ def dice_loss_from_logits(preds: torch.Tensor, gt: torch.Tensor, smooth: float =
 
 
 class HybridLoss(nn.Module):
-    def __init__(self, bce_weight: float = 1.0, dice_weight: float = 0.3):
+    def __init__(self, bce_weight: float = 1.0, dice_weight: float = 0.5):
         super().__init__()
         self.bce_weight = float(bce_weight)
         self.dice_weight = float(dice_weight)

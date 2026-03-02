@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torchvision.transforms as T
 from torch.utils.data import DataLoader, Dataset
 from torch.cuda.amp import GradScaler, autocast
 
@@ -68,6 +69,8 @@ class BSDS500Dataset(Dataset):
                 self.pairs.append((img_path, gt_path))
         if len(self.pairs) == 0:
             raise RuntimeError('No (image, gt) pairs found.')
+            
+        self.color_jitter = T.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1)
 
     def __len__(self):
         return len(self.pairs)
@@ -96,6 +99,9 @@ class BSDS500Dataset(Dataset):
         img = img.transpose(2, 0, 1)
         img_t = torch.from_numpy(img)
         gt_t = torch.from_numpy(gt).unsqueeze(0)
+        
+        if self.augment:
+            img_t = self.color_jitter(img_t)
 
         return img_t, gt_t
 
@@ -114,6 +120,7 @@ def main():
     p.add_argument('--epochs', type=int, default=100)
     p.add_argument('--batch', type=int, default=4)
     p.add_argument('--lr', type=float, default=1e-3)
+    p.add_argument('--weight_decay', type=float, default=1e-4)
     p.add_argument('--img_size', type=int, default=512)
     p.add_argument('--num_workers', type=int, default=4)
     p.add_argument('--amp', action='store_true')
@@ -145,12 +152,19 @@ def main():
     val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=args.num_workers, pin_memory=True)
 
     print(f'Building model: backbone={args.backbone}, router={args.router_mode}, topk={args.topk}')
-    model = DMOREdgeNet(channels=args.channels, topk=args.topk, router_mode=args.router_mode,
-                        temperature=args.temperature, backbone=args.backbone, enabled_ops=args.enabled_ops,
-                        pool_mode=args.pool_mode,).to(device)
-
+    model = DMOREdgeNet(
+    channels=args.channels,
+    topk=args.topk,
+    router_mode=args.router_mode,
+    temperature=args.temperature,
+    backbone=args.backbone,
+    enabled_ops=args.enabled_ops,
+    pool_mode=args.pool_mode
+).to(device)
     criterion = HybridLoss(bce_weight=args.bce_weight, dice_weight=args.dice_weight).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
+    
     scaler = GradScaler(enabled=args.amp)
     best_val = float('inf')
 
@@ -184,8 +198,11 @@ def main():
                     loss = criterion(preds, gts)
                 va_loss += float(loss.item())
         va_loss /= max(1, len(val_loader))
+        
+        current_lr = optimizer.param_groups[0]['lr']
+        scheduler.step()
 
-        print(f'Epoch [{epoch}/{args.epochs}] | Train: {tr_loss:.4f} | Val: {va_loss:.4f}')
+        print(f'Epoch [{epoch}/{args.epochs}] | LR: {current_lr:.6f} | Train: {tr_loss:.4f} | Val: {va_loss:.4f}')
 
         ckpt = {
             'epoch': epoch,

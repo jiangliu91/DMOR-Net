@@ -116,6 +116,8 @@ def run_eval(pred_dir, gt_dir, device="cuda", threshold_steps=99):
         "Precision": float(P[idx].item()),
         "Recall": float(R[idx].item()),
         "num_images": ois_count,
+        "precision_curve": P.tolist(),
+        "recall_curve": R.tolist(),
     }
 
 if __name__ == "__main__":

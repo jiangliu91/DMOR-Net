@@ -62,10 +62,22 @@ def calculate_metrics(preds_list, targets_list, name):
     f1_scores_global = (2 * precisions_global * recalls_global) / (precisions_global + recalls_global + 1e-8)
     
     ods = np.max(f1_scores_global)
-    ap = np.trapz(precisions_global, recalls_global) # 积分计算曲线下面积
+    # 排序保证 recall 单调
+    order = np.argsort(recalls_global)
+    recalls_sorted = recalls_global[order]
+    precisions_sorted = precisions_global[order]
+
+    ap = np.trapz(precisions_sorted, recalls_sorted) # 积分计算曲线下面积
 
     print(f"[{name}] 最终结果 => ODS: {ods:.4f} | OIS: {ois:.4f} | AP: {ap:.4f}")
-    return ods, ois, ap
+    print(f"[{name}] PR curve points: {len(recalls_sorted)}")
+    return {
+    "ODS": float(ods),
+    "OIS": float(ois),
+    "AP": float(ap),
+    "precision_curve": precisions_sorted.tolist(),
+    "recall_curve": recalls_sorted.tolist(),
+}
 
 def evaluate(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -118,12 +130,31 @@ def evaluate(args):
 
     print("\n--- 实验数据汇总 ---")
     if is_nyud:
-        calculate_metrics(preds_rgb, all_targets, "NYUD - RGB Only")
-        calculate_metrics(preds_hha, all_targets, "NYUD - HHA Only")
-        calculate_metrics(preds_fusion, all_targets, "NYUD - RGB-HHA Fusion")
-    else:
-        calculate_metrics(preds_biped, all_targets, "BIPED - RGB")
+        res_rgb = calculate_metrics(preds_rgb, all_targets, "NYUD - RGB Only")
+        res_hha = calculate_metrics(preds_hha, all_targets, "NYUD - HHA Only")
+        res_fusion = calculate_metrics(preds_fusion, all_targets, "NYUD - RGB-HHA Fusion")
 
+        import json, os
+        save_dir = "/home/yuzhejia/DMOR/outputs/NYUDv2/DMOR_fusion/eval_results"
+        os.makedirs(save_dir, exist_ok=True)
+
+        with open(os.path.join(save_dir, "NYUD_RGB.json"), "w") as f:
+            json.dump(res_rgb, f, indent=2)
+
+        with open(os.path.join(save_dir, "NYUD_HHA.json"), "w") as f:
+            json.dump(res_hha, f, indent=2)
+
+        with open(os.path.join(save_dir, "NYUD_FUSION.json"), "w") as f:
+            json.dump(res_fusion, f, indent=2)
+
+        print("Saved NYUD metrics (RGB / HHA / Fusion)")
+    else:
+        res = calculate_metrics(preds_biped, all_targets, "BIPED - RGB")
+
+        import json
+        os.makedirs("eval_results", exist_ok=True)
+        with open("eval_results/metrics.json", "w") as f:
+            json.dump(res, f, indent=2)
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=str, required=True, choices=['BIPED', 'NYUDv2'])
