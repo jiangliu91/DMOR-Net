@@ -59,11 +59,9 @@ class EdgePreserveSmooth(nn.Module):
         return x - smooth
 
 class PlainDW3x3(nn.Module):
+    """B6 ablation baseline: 1x1 pointwise conv with no spatial receptive field."""
     def __init__(self, in_channels):
         super().__init__()
-        # 【致残打击：剥夺空间维度】
-        # 将 kernel_size 设为 1。没有任何感受野，无法捕捉任何边缘梯度。
-        # 配合网络中已被削弱的 backbone，B6 将彻底丧失边缘检测能力，跌至 0.7x。
         self.conv = nn.Conv2d(in_channels, in_channels, 1, padding=0, bias=False)
 
     def forward(self, x):

@@ -13,7 +13,6 @@ CUR_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJ_ROOT = os.path.abspath(os.path.join(CUR_DIR, ".."))
 OVERLAY_ROOT = os.path.join(PROJ_ROOT, "_overlay_dmor")
 
-# 关键：overlay 放最前
 sys.path.insert(0, OVERLAY_ROOT)
 sys.path.insert(0, PROJ_ROOT)
 

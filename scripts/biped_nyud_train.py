@@ -12,12 +12,10 @@ import numpy as np
 import cv2
 from pathlib import Path
 
-# 获取项目根目录 (DMOR-Edge) 并加入系统路径
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# 从 models 文件夹中正确导入你的网络和损失函数
 from models.net import DMOREdgeNet
 from models.loss import HybridLoss
 

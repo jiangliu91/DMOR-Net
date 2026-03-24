@@ -4,12 +4,10 @@ import torch
 import argparse
 from pathlib import Path
 
-# 获取项目根目录 (DMOR-Edge) 并加入系统路径
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# 修正导入路径：从 models 导入网络，从 scripts 导入 Wrapper
 from models.net import DMOREdgeNet
 from scripts.biped_nyud_train import DMORFusionWrapper
 

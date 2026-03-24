@@ -46,13 +46,11 @@ def main() -> None:
     ap.add_argument("--variants", type=str, default="tiny,small,main,large")
     ap.add_argument("--channels_map", type=str, default="tiny:16,small:24,main:32,large:48")
     
-    # 找回平衡：适中的学习率、轮数和权重衰减
     ap.add_argument("--lr_map", type=str, default="tiny:1e-3,small:1e-3,main:8e-4,large:4e-4")
     ap.add_argument("--epochs_map", type=str, default="tiny:100,small:100,main:90,large:80")
     ap.add_argument("--wd_map", type=str, default="tiny:1e-4,small:1e-4,main:2e-4,large:4e-4")
-    
-    # [NEW] 解决大通道下 DMOR 路由坍塌的核心策略：提高大模型的 Softmax 温度
-    ap.add_argument("--temperature_map", type=str, default="tiny:1.0,small:1.0,main:1.2,large:2.5")
+    ap.add_argument("--temperature_map", type=str, default="tiny:1.0,small:1.0,main:1.2,large:2.5",
+                    help="Per-variant Softmax temperature to prevent routing collapse at large channel counts")
 
     args = ap.parse_args()
 
@@ -64,7 +62,7 @@ def main() -> None:
     lr_map = parse_map_arg(args.lr_map, float)
     epochs_map = parse_map_arg(args.epochs_map, int)
     wd_map = parse_map_arg(args.wd_map, float)
-    temp_map = parse_map_arg(args.temperature_map, float) # [NEW]
+    temp_map = parse_map_arg(args.temperature_map, float)
 
     variants = [v.strip().lower() for v in args.variants.split(",") if v.strip()]
 
@@ -75,7 +73,7 @@ def main() -> None:
         lr = lr_map[v]
         epochs = epochs_map[v]
         wd = wd_map[v]
-        temp = temp_map[v] # [NEW]
+        temp = temp_map[v]
         
         tag = f"{args.exp_prefix}_{v.capitalize()}"
         out_dir = outputs_root / tag
@@ -85,8 +83,8 @@ def main() -> None:
         ckpt_path = ckpt_dir / "dmor_best.pth"
 
         print("\n" + "=" * 70)
-        print(f"🚀 Running: {tag}")
-        print(f"   Ch:{channels} | LR:{lr} | Ep:{epochs} | WD:{wd} | Temp:{temp}")
+        print(f"Running: {tag}")
+        print(f"  Ch:{channels} | LR:{lr} | Ep:{epochs} | WD:{wd} | Temp:{temp}")
         print("=" * 70, flush=True)
 
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -106,7 +104,7 @@ def main() -> None:
             "--channels", str(channels),
             "--topk", str(args.topk),
             "--router_mode", args.router_mode,
-            "--temperature", str(temp),    # [NEW] 传入动态温度
+            "--temperature", str(temp),
             "--backbone", args.backbone,
             "--amp",
         ]
@@ -120,7 +118,7 @@ def main() -> None:
             "--channels", str(channels),
             "--topk", str(args.topk),
             "--router_mode", args.router_mode,
-            "--temperature", str(temp),    # [NEW] 测试时保持一致的温度
+            "--temperature", str(temp),
         ]
         _run(export_cmd, env=os.environ.copy(), cwd=repo_root)
 
@@ -143,7 +141,7 @@ def main() -> None:
 
     out_summary = outputs_root / f"{args.exp_prefix}_param_budget_scaling_summary.json"
     out_summary.write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    print(f"\n✅ Saved summary to: {out_summary}")
+    print(f"\nSaved summary to: {out_summary}")
 
 if __name__ == "__main__":
     main()

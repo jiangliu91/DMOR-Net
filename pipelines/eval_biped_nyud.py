@@ -7,7 +7,6 @@ import argparse
 from pathlib import Path
 from sklearn.metrics import precision_recall_curve
 
-# 获取项目根目录 (DMOR-Edge) 并加入系统路径以导入网络模型
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -17,75 +16,62 @@ from scripts.biped_nyud_train import DMORFusionWrapper, EdgeDataset
 from torch.utils.data import DataLoader
 
 def non_maximum_suppression(edge_map):
-    """
-    使用更通用的形态学方法实现边缘细化 (NMS 替代方案)，
-    不再依赖不稳定的 cv2.ximgproc。
-    """
-    # 归一化到 0-255
+    """Morphology-based edge thinning (NMS alternative, no cv2.ximgproc dependency)."""
     edge_map = (edge_map * 255.0).astype(np.uint8)
-    
-    # 使用结构元素进行骨架细化或简单的形态学梯度处理
     kernel = np.ones((3, 3), np.uint8)
     erode = cv2.erode(edge_map, kernel, iterations=1)
     edge_map_nms = cv2.absdiff(edge_map, erode)
-    
-    # 也可以使用简单的多尺度高斯模糊平滑噪声
     edge_map_nms = cv2.GaussianBlur(edge_map, (3, 3), 0)
-    
     return edge_map_nms.astype(np.float32) / 255.0
 
 def calculate_metrics(preds_list, targets_list, name):
     """
-    Calculates ODS, OIS, and AP metrics exactly as required for academic benchmarks.
-    preds_list: List of flattened numpy arrays (per image prediction)
-    targets_list: List of flattened numpy arrays (per image ground truth)
+    Compute ODS, OIS, and AP for academic edge detection benchmarks.
+
+    Args:
+        preds_list: list of flattened per-image prediction arrays
+        targets_list: list of flattened per-image ground truth arrays
     """
-    print(f"[{name}] 开始计算严谨评估指标 (ODS, OIS, AP)...")
-    
-    # 1. 计算 OIS (Optimal Image Scale) - 单图最优阈值
+    print(f"[{name}] Computing metrics (ODS, OIS, AP)...")
+
     ois_f1_scores = []
     for pred, target in zip(preds_list, targets_list):
-        # 忽略全黑的 target 图片以防除以零报错
         if np.sum(target) == 0:
             continue
         precisions, recalls, thresholds = precision_recall_curve(target, pred)
         f1_scores = (2 * precisions * recalls) / (precisions + recalls + 1e-8)
         ois_f1_scores.append(np.max(f1_scores))
-    
+
     ois = np.mean(ois_f1_scores) if len(ois_f1_scores) > 0 else 0.0
 
-    # 2. 计算 ODS (Optimal Dataset Scale) 和 AP (Average Precision) - 全局阈值
     preds_flat = np.concatenate(preds_list)
     targets_flat = np.concatenate(targets_list)
-    
+
     precisions_global, recalls_global, thresholds_global = precision_recall_curve(targets_flat, preds_flat)
     f1_scores_global = (2 * precisions_global * recalls_global) / (precisions_global + recalls_global + 1e-8)
-    
+
     ods = np.max(f1_scores_global)
-    # 排序保证 recall 单调
     order = np.argsort(recalls_global)
     recalls_sorted = recalls_global[order]
     precisions_sorted = precisions_global[order]
 
-    ap = np.trapz(precisions_sorted, recalls_sorted) # 积分计算曲线下面积
+    ap = np.trapz(precisions_sorted, recalls_sorted)
 
-    print(f"[{name}] 最终结果 => ODS: {ods:.4f} | OIS: {ois:.4f} | AP: {ap:.4f}")
-    print(f"[{name}] PR curve points: {len(recalls_sorted)}")
+    print(f"[{name}] ODS: {ods:.4f} | OIS: {ois:.4f} | AP: {ap:.4f}")
     return {
-    "ODS": float(ods),
-    "OIS": float(ois),
-    "AP": float(ap),
-    "precision_curve": precisions_sorted.tolist(),
-    "recall_curve": recalls_sorted.tolist(),
-}
+        "ODS": float(ods),
+        "OIS": float(ois),
+        "AP": float(ap),
+        "precision_curve": precisions_sorted.tolist(),
+        "recall_curve": recalls_sorted.tolist(),
+    }
 
 def evaluate(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     is_nyud = (args.dataset == 'NYUDv2')
-    
-    # 对齐官方的距离容差标准
-    max_dist = 0.011 if is_nyud else 0.015 
-    print(f"Evaluating {args.dataset} with maxDist equivalent: {max_dist}")
+
+    max_dist = 0.011 if is_nyud else 0.015
+    print(f"Evaluating {args.dataset} | maxDist: {max_dist}")
 
     img_size = (480, 640) if is_nyud else (720, 1280)
     test_dataset = EdgeDataset(args.data_root, args.dataset, is_train=False, img_size=img_size)
@@ -95,7 +81,7 @@ def evaluate(args):
         model = DMORFusionWrapper(channels=args.channels).to(device)
     else:
         model = DMOREdgeNet(channels=args.channels).to(device)
-        
+
     print(f"Loading weights from {args.checkpoint}")
     model.load_state_dict(torch.load(args.checkpoint, map_location=device))
     model.eval()
@@ -106,59 +92,55 @@ def evaluate(args):
     else:
         preds_biped = []
 
-    print("Running inference and NMS extraction on test set...")
+    print("Running inference on test set...")
     with torch.no_grad():
         for data in test_loader:
             if is_nyud:
                 img_rgb, img_hha, target = data
                 out_rgb, out_hha, out_fusion = model(img_rgb.to(device), img_hha.to(device))
-                
-                pred_rgb_nms = non_maximum_suppression(torch.sigmoid(out_rgb).cpu().numpy().squeeze())
-                pred_hha_nms = non_maximum_suppression(torch.sigmoid(out_hha).cpu().numpy().squeeze())
-                pred_fusion_nms = non_maximum_suppression(torch.sigmoid(out_fusion).cpu().numpy().squeeze())
-                
-                preds_rgb.append(pred_rgb_nms.flatten())
-                preds_hha.append(pred_hha_nms.flatten())
-                preds_fusion.append(pred_fusion_nms.flatten())
+
+                preds_rgb.append(non_maximum_suppression(torch.sigmoid(out_rgb).cpu().numpy().squeeze()).flatten())
+                preds_hha.append(non_maximum_suppression(torch.sigmoid(out_hha).cpu().numpy().squeeze()).flatten())
+                preds_fusion.append(non_maximum_suppression(torch.sigmoid(out_fusion).cpu().numpy().squeeze()).flatten())
             else:
                 img_rgb, target = data
                 out_biped = model(img_rgb.to(device))
-                pred_biped_nms = non_maximum_suppression(torch.sigmoid(out_biped).cpu().numpy().squeeze())
-                preds_biped.append(pred_biped_nms.flatten())
-            
+                preds_biped.append(non_maximum_suppression(torch.sigmoid(out_biped).cpu().numpy().squeeze()).flatten())
+
             all_targets.append(target.numpy().squeeze().flatten())
 
-    print("\n--- 实验数据汇总 ---")
+    print("\n--- Results ---")
     if is_nyud:
         res_rgb = calculate_metrics(preds_rgb, all_targets, "NYUD - RGB Only")
         res_hha = calculate_metrics(preds_hha, all_targets, "NYUD - HHA Only")
         res_fusion = calculate_metrics(preds_fusion, all_targets, "NYUD - RGB-HHA Fusion")
 
-        import json, os
-        save_dir = "/home/yuzhejia/DMOR/outputs/NYUDv2/DMOR_fusion/eval_results"
+        import json
+        save_dir = args.save_dir if args.save_dir else "eval_results"
         os.makedirs(save_dir, exist_ok=True)
 
         with open(os.path.join(save_dir, "NYUD_RGB.json"), "w") as f:
             json.dump(res_rgb, f, indent=2)
-
         with open(os.path.join(save_dir, "NYUD_HHA.json"), "w") as f:
             json.dump(res_hha, f, indent=2)
-
         with open(os.path.join(save_dir, "NYUD_FUSION.json"), "w") as f:
             json.dump(res_fusion, f, indent=2)
 
-        print("Saved NYUD metrics (RGB / HHA / Fusion)")
+        print(f"Saved NYUD metrics to {save_dir}")
     else:
         res = calculate_metrics(preds_biped, all_targets, "BIPED - RGB")
 
         import json
-        os.makedirs("eval_results", exist_ok=True)
-        with open("eval_results/metrics.json", "w") as f:
+        save_dir = args.save_dir if args.save_dir else "eval_results"
+        os.makedirs(save_dir, exist_ok=True)
+        with open(os.path.join(save_dir, "metrics.json"), "w") as f:
             json.dump(res, f, indent=2)
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=str, required=True, choices=['BIPED', 'NYUDv2'])
     parser.add_argument("--data_root", type=str, required=True)
     parser.add_argument("--checkpoint", type=str, required=True)
     parser.add_argument("--channels", type=int, default=32)
+    parser.add_argument("--save_dir", type=str, default="eval_results")
     evaluate(parser.parse_args())

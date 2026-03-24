@@ -99,10 +99,8 @@ def main():
     ap.add_argument("--dynamic_ratio", type=float, default=0.75, 
                     help="Proportion of total FLOPs occupied by the dynamic operator pool")
     
-    # ====== [新增参数：学术界零样本超网剪枝] ======
-    ap.add_argument("--supernet_ckpt", type=str, default="", 
-                    help="指向最高分(如K=5)模型的.pth路径。开启后跳过训练，直接推理出绝对单调递减的分数！")
-    # ============================================
+    ap.add_argument("--supernet_ckpt", type=str, default="",
+                    help="Path to a dense supernet checkpoint. When set, skip training and evaluate zero-shot pruned subnetworks.")
     
     args = ap.parse_args()
 
@@ -156,9 +154,8 @@ def main():
         print(f"Running: {tag} | Top-K: {k} ({active_ratio*100:.1f}%)")
         print(f"==============================")
 
-        # ====== [核心逻辑：超网接管与模型训练] ======
         if args.supernet_ckpt and Path(args.supernet_ckpt).exists():
-            print(f"[INFO] 🚀 启用超网模式 (Zero-Shot Pruning): 直接使用超网权重测试 K={k}，跳过训练！")
+            print(f"[INFO] Zero-Shot Pruning enabled: evaluating K={k} directly from supernet weights.")
             ckpt_path = Path(args.supernet_ckpt)
         else:
             ckpt_path = ckpt_dir / args.ckpt_name
@@ -170,8 +167,6 @@ def main():
                        "--topk", str(k), "--router_mode", args.router_mode, "--temperature", str(args.temperature),
                        "--backbone", "lite", "--amp"]
                 run_cmd(cmd, env=env, cwd=repo_root)
-        # ============================================
-
         if not ckpt_path.exists():
             print(f"[WARN] ckpt not found: {ckpt_path} (skipping)")
             continue
@@ -229,7 +224,7 @@ def main():
             lines.append(",".join(str(r.get(c, "")) for c in cols))
         summary_csv.write_text("\n".join(lines), encoding="utf-8")
 
-    print(f"\n✅ Top-K tradeoff finished. Results saved to {summary_csv}")
+    print(f"\nTop-K tradeoff finished. Results saved to {summary_csv}")
 
 if __name__ == "__main__":
     main()

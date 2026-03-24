@@ -8,7 +8,7 @@ sys.path.insert(0, ROOT)
 import torch
 import torch.nn.functional as F
 
-from models import DMOR, DMOREdgeNet  # 走 public API（更体系）
+from models import DMOR, DMOREdgeNet
 
 
 @torch.no_grad()
@@ -50,7 +50,6 @@ def test_dmor_block(topk: int, router_mode: str):
     if router_mode != "uniform":
         check_weights(w.detach(), topk=topk)
 
-    # 简单可反传 loss（确保梯度存在）
     pred = torch.sigmoid(y.mean(dim=1, keepdim=True))
     gt = (torch.rand(B, 1, H, W, device=device) > 0.9).float()
     loss = F.binary_cross_entropy(pred, gt)
@@ -81,19 +80,16 @@ def test_end2end_net(topk: int, router_mode: str, backbone: str):
     assert weights is None or (weights.ndim == 4), "weights should be [B,N,H,W] or None"
 
     if weights is not None and router_mode != "uniform":
-        # 端到端 weights 的 H,W 与 backbone 输出一致（通常也是 256x256）
         check_weights(weights, topk=topk)
 
     print(f"✅ DMOREdgeNet ok | backbone={backbone} router={router_mode} topk={topk} | device={device}")
 
 
 def main():
-    # 1) DMOR 模块级 sanity
     test_dmor_block(topk=0, router_mode="dmor")
     test_dmor_block(topk=2, router_mode="dmor")
     test_dmor_block(topk=0, router_mode="uniform")
 
-    # 2) 端到端网络 sanity
     test_end2end_net(topk=0, router_mode="dmor", backbone="lite")
     test_end2end_net(topk=2, router_mode="dmor", backbone="lite")
     test_end2end_net(topk=0, router_mode="uniform", backbone="tiny")

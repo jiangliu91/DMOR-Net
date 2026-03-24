@@ -1,342 +1,157 @@
-# DMOR-Edge
+# DMOR-Net: Dynamic Multi-Operator Routing for Lightweight Edge Detection
 
-## Dynamic Modulated Operator Router for Lightweight Edge Detection
+<!-- <p align="center"><b>Conference Year</b></p> -->
 
-![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
-![Python 3.8+](https://img.shields.io/badge/Python-3.8%2B-blue.svg)
-![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-ee4c2c.svg)
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg"></a>
+  <img src="https://img.shields.io/badge/Python-3.8%2B-blue.svg">
+  <img src="https://img.shields.io/badge/PyTorch-2.0%2B-ee4c2c.svg">
+</p>
+
+<!-- [[Paper]]() | [[Project Page]]() -->
 
-------------------------------------------------------------------------
+<p align="center">
+<img src="fig/framework.png" width="100%">
+</p>
 
-# 1. Abstract
+## Highlights
+
+- **Dynamic operator routing** in operator space with dual-level (global + spatial) gating
+- **Top-K sparse routing** with straight-through estimation, enabling zero-shot subnetwork pruning
+- **Only 0.13M parameters** with competitive ODS/OIS/AP on BSDS500, BIPEDv1, and NYUDv2
+
+## Main Results
 
-DMOR-Edge is a lightweight, operator-space dynamic routing framework for
-edge detection. Instead of statically stacking convolutional operators,
-DMOR introduces a **Dynamic Modulated Operator Router (DMOR)** that
-performs input-adaptive selection and spatially-varying fusion of
-complementary lightweight operators.
+Evaluation of DMOR-Net across BSDS500, BIPEDv1, and NYUDv2 benchmarks.
+
+| Dataset | Input | ODS | OIS | AP | Params (M) | FLOPs (G) | FPS |
+|:--------|:-----:|:---:|:---:|:--:|:----------:|:---------:|:---:|
+| BSDS500 | RGB | 0.837 | 0.843 | 0.903 | 0.134 | 4.36 | 52.6 |
+| BIPEDv1 | RGB | 0.968 | 0.971 | 0.982 | 0.134 | 4.36 | 22.4 |
+| NYUD | RGB | 0.859 | 0.859 | 0.873 | 0.132 | 5.10 | 38.6 |
+| NYUD | HHA | 0.858 | 0.853 | 0.764 | 0.132 | 5.10 | 38.6 |
+| NYUD | RGB-HHA | 0.860 | 0.859 | 0.874 | 0.132 | 5.10 | 38.6 |
+
+> Please refer to our paper for full comparison with state-of-the-art methods.
 
-Unlike conventional lightweight CNNs that rely on fixed receptive
-fields, DMOR explicitly models *operator diversity* and performs spatial
-routing in operator space.
-
-The framework is designed to:
-
--   Preserve fine object boundaries
--   Suppress high-frequency texture noise
--   Maintain extremely low parameter count (\<1M)
--   Enable controllable sparsity via Top-K routing
--   Support zero-shot subnetwork pruning from a dense supernet
--   Achieve competitive ODS / OIS / AP with academic-grade evaluation
-
-This repository contains the full implementation, training scripts,
-ablation studies, SOTA-aligned evaluation pipelines, and efficiency
-profiling tools.
-
-------------------------------------------------------------------------
-
-# 2. Motivation
-
-Traditional lightweight edge detectors rely on:
-
--   Static convolution stacking
--   Fixed receptive field composition
--   Uniform operator contribution
-
-However, edges in natural images are highly heterogeneous:
-
--   Structural boundaries require large receptive fields
--   Texture edges require suppression
--   Thin contours require precise gradient modeling
--   Depth edges (NYUDv2) require modality-aware routing
-
-A static operator combination is fundamentally suboptimal.
-
-We instead formulate edge detection as an **operator routing problem**,
-where each spatial location dynamically selects the most appropriate
-operator subset.
-
-------------------------------------------------------------------------
-
-# 3. Method
-
-## 3.1 Overview
-
-Pipeline:
-
-Input → Lightweight Encoder → DMOR Blocks → Multi-scale Decoder → Edge
-Prediction
-
-The key innovation lies in the DMOR block, which performs spatially
-varying operator selection and fusion.
-
-------------------------------------------------------------------------
-
-## 3.2 Operator Space Modeling
-
-Given feature tensor:
-
-    F ∈ ℝ^{C×H×W}
-
-We define a diverse set of lightweight operators:
-
-    O = {O1, O2, ..., ON}
-
-Operators include depthwise conv, dilated depthwise conv,
-Laplacian-style filters, direction-aware filters, and edge-preserving
-smoothing units.
-
-Parallel operator responses:
-
-    Fi = Oi(F)
-
-This creates an operator response space.
-
-------------------------------------------------------------------------
-
-## 3.3 Dynamic Modulated Routing
-
-A lightweight routing network predicts spatial weights:
-
-    W = Softmax( R(F) / T )
-
-Where:
-
--   R(·) is a compact gating network
--   T is temperature controlling distribution sharpness
-
-Spatially varying weights:
-
-    W ∈ ℝ^{N×H×W}
-
-Final aggregation:
-
-    F_out = Σ_i Wi ⊙ Fi
-
-This enables fine-grained spatial operator modulation.
-
-------------------------------------------------------------------------
-
-## 3.4 Top-K Sparse Routing
-
-To enforce competition and improve efficiency:
-
-For each spatial location:
-
-    Keep only K largest Wi
-    Zero out the rest
-
-Benefits:
-
--   Implicit sparsity
--   Reduced theoretical FLOPs
--   Improved interpretability
--   Zero-shot subnetwork evaluation
-
-This allows evaluating sparse subnetworks directly from a trained dense
-supernet checkpoint without retraining.
-
-------------------------------------------------------------------------
-
-## 3.5 Dual-Level Modulation
-
-Global Modulation: - Channel attention across operators
-
-Spatial Modulation: - Pixel-wise routing masks
-
-This dual design balances global structure bias and local adaptivity.
-
-------------------------------------------------------------------------
-
-## 3.6 Decoder & Loss
-
-Lightweight multi-scale decoder:
-
--   Bilinear upsampling
--   Feature fusion
--   1×1 prediction head
--   Deep supervision (optional)
-
-Hybrid Loss:
-
-    L = λ1 * BCE + λ2 * Dice
-
-For high-resolution datasets (e.g., BIPEDv2), texture-suppression
-variants can be enabled.
-
-------------------------------------------------------------------------
-
-# 4. Repository Structure
-
-    DMOR-Edge/
-    ├── dataset/
-    ├── models/
-    ├── scripts/
-    ├── pipelines/
-    ├── test/
-    └── outputs/
-
-Core model files remain immutable. Experimental logic is isolated.
-
-------------------------------------------------------------------------
-
-# 5. Datasets
-
-## 5.1 BSDS500
-
-dataset/BSDS500/data/ ├── images/ └── groundTruth/
-
-## 5.2 BIPEDv2
-
-dataset/BIPEDv2/ ├── imgs/ └── edge_maps/
-
-## 5.3 NYUDv2
-
-dataset/NYUDv2/
-
-Dual-stream RGB-HHA fusion is supported.
-
-------------------------------------------------------------------------
-
-# 6. Training
-
-Example:
-
-    python scripts/bsds_train.py         --data_root dataset/BSDS500/data         --device cuda         --epochs 200         --batch 4         --img_size 512         --router_mode dmor         --topk 2
-
-AMP training is supported.
-
-------------------------------------------------------------------------
-
-# 7. Evaluation (Academic-Grade)
-
-    python pipelines/eval_bsds500.py         --pred_dir outputs/...         --gt_dir dataset/BSDS500/data/groundTruth/test         --ckpt path/to/best.pth
-
-Metrics:
-
--   ODS
--   OIS
--   AP
--   R50
-
-Supports:
-
--   Multi-scale testing (MS-Test)
--   Gradient-direction NMS
--   Optimal threshold search
--   Official-style distance tolerance matching
-
-------------------------------------------------------------------------
-
-# 8. Ablation Studies
-
-Located in:
-
-    test/
-
-Includes:
-
--   Top-K tradeoff
--   Routing strategy comparison
--   Parameter scaling
--   Alpha sensitivity
--   Full operator ablation (B1\~B6)
-
-Overlay injection mechanism ensures core model purity.
-
-------------------------------------------------------------------------
-
-# 9. Efficiency Profiling
-
-    python scripts/test_dmor.py
-
-Outputs:
-
--   Params (M)
--   FLOPs (G)
--   FPS
--   Theoretical sparse FLOPs (Top-K mode)
-
-------------------------------------------------------------------------
-
-# 10. Reproducibility
-
--   Fixed seeds
--   Deterministic dataloaders
--   Official evaluation pipeline
--   Structured output tree
--   Fail-fast subprocess experiment runners
-
-------------------------------------------------------------------------
-
-# 11. License
-
-MIT License
-
-------------------------------------------------------------------------
-
-# 12. Citation
-
-@article{dmor_edge_2026, title={Dynamic Modulated Operator Router for
-Lightweight Edge Detection}, year={2026} }
-
-------------------------------------------------------------------------
-
-# 13. Updated Repository Notes
-
--   Master experiment runner
--   Zero-shot Top-K pruning
--   Overlay-based routing experiments
--   Integrated complexity profiling
--   Unified multi-dataset execution
-
-------------------------------------------------------------------------
-
-# 14. Master Runner
-
-    python test/run_everything_dmor_suite.py
-
-Executes:
-
--   Top-K tradeoff
--   Routing strategy comparison
--   Alpha sensitivity
--   Parameter budget scaling
--   Full ablation suite
-
-------------------------------------------------------------------------
-
-# 15. Overlay Routing Architecture
-
-Located under:
-
-    test/_overlay_dmor/
-
-Design Principles:
-
--   No modification of models/dmor.py
--   Runtime injection only
--   Clean separation of research variants
-
-------------------------------------------------------------------------
-
-# 16. Output Structure Convention
-
-    outputs/
-        ├── ckpt/
-        ├── test_png/
-        └── eval_official_gpu/
-
-All metrics stored as JSON for reproducibility.
-
-------------------------------------------------------------------------
-
-# 17. Engineering Philosophy
-
--   Immutable core
--   Overlay-based research isolation
--   Explicit subprocess execution
--   Strict fail-fast behavior
--   Reproducible academic design
-
-------------------------------------------------------------------------
+## Installation
+
+```bash
+conda create -n dmor python=3.8 -y
+conda activate dmor
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+pip install opencv-python scipy numpy thop tqdm scikit-learn
+```
+
+## Data Preparation
+
+Download the datasets from their official sources and organize as follows:
+
+```
+dataset/
+├── BSDS500/data/
+│   ├── images/{train,val,test}/
+│   └── groundTruth/{train,val,test}/
+├── BIPEDv2/
+│   ├── imgs/
+│   └── edge_maps/
+└── NYUDv2/
+    ├── images/
+    ├── gt/
+    └── HHA/
+```
+
+| Dataset | Source |
+|:--------|:-------|
+| BSDS500 | [Berkeley website](https://www2.eecs.berkeley.edu/Research/Projects/CS/vision/grouping/resources.html) |
+| BIPEDv2 | [GitHub](https://github.com/xavysp/BIPED) |
+| NYUDv2 | [NYU website](https://cs.nyu.edu/~silberman/datasets/nyu_depth_v2.html) |
+
+## Pretrained Models
+
+Our best model checkpoint is provided in `result/`.
+
+| Model | Dataset | ODS | OIS | AP | Download |
+|:------|:--------|:---:|:---:|:--:|:--------:|
+| DMOR-Net (K=2, C=32) | BSDS500 | 0.837 | 0.843 | 0.903 | [result/](result/) |
+
+## Quick Start
+
+### Testing with Pretrained Weights
+
+```bash
+python scripts/bsds_export.py \
+    --data_root dataset/BSDS500/data \
+    --ckpt result/dmor_best.pth \
+    --out_dir outputs/test_png \
+    --device cuda
+```
+
+### Evaluation
+
+```bash
+python pipelines/eval_bsds500.py \
+    --pred_dir outputs/test_png \
+    --gt_dir dataset/BSDS500/data/groundTruth/test
+```
+
+## Training
+
+### BSDS500
+
+```bash
+python scripts/bsds_train.py \
+    --data_root dataset/BSDS500/data \
+    --out_dir outputs/bsds \
+    --ckpt_dir outputs/ckpt \
+    --epochs 200 --batch 4 --img_size 512 \
+    --router_mode dmor --topk 2 --amp
+```
+
+### BIPEDv2 / NYUDv2
+
+```bash
+python scripts/biped_nyud_train.py \
+    --dataset BIPED \
+    --data_root dataset/BIPEDv2 \
+    --ckpt_dir outputs/ckpt_biped \
+    --epochs 40 --amp
+```
+
+<details>
+<summary><b>Full argument list</b></summary>
+
+| Argument | Default | Description |
+|:---------|:--------|:------------|
+| `--router_mode` | `dmor` | `dmor` / `global` / `spatial` / `uniform` |
+| `--topk` | `2` | Active operators per location (0 = dense) |
+| `--channels` | `32` | Base feature channels |
+| `--temperature` | `1.0` | Softmax temperature |
+| `--amp` | — | Mixed precision training |
+
+</details>
+
+## Repository Structure
+
+```
+DMOR-Edge/
+├── models/
+│   ├── dmor.py          # DMOR routing module
+│   ├── net.py           # DMOREdgeNet (backbone + decoder)
+│   ├── operators.py     # Operator pool (O1–O5)
+│   └── loss.py          # Balanced BCE + Dice loss
+├── scripts/             # Training, export, profiling
+├── pipelines/           # Evaluation (BSDS500, BIPED, NYUDv2)
+├── test/                # Ablation experiments
+├── result/              # Pretrained checkpoint
+└── fig/                 # Figures
+```
+
+
+## Acknowledgement
+
+We thank the authors of [BSDS500](https://www2.eecs.berkeley.edu/Research/Projects/CS/vision/grouping/resources.html), [BIPED](https://github.com/xavysp/BIPED), and [NYUDv2](https://cs.nyu.edu/~silberman/datasets/nyu_depth_v2.html) for releasing their datasets.
+
+## License
+
+This project is released under the [MIT License](LICENSE).

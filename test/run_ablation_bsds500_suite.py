@@ -1,12 +1,12 @@
 """
 BSDS500 Operator Ablation Suite (B1~B6)
-FULLY FIXED VERSION – NO PYTHONPATH
 
-✔ No PYTHONPATH dependency
-✔ No import priority issues
-✔ No environment pollution
-✔ 100% overlay enforcement
-✔ Each subprocess force-injects overlay modules
+Overlay-based design:
+- No PYTHONPATH dependency
+- No import priority issues
+- No environment pollution
+- 100% overlay enforcement
+- Each subprocess force-injects overlay modules
 """
 
 from __future__ import annotations
@@ -22,13 +22,11 @@ from pathlib import Path
 
 def build_launch_command(script_path: Path, overlay_root: Path, args_list: list[str]):
     repo_root = overlay_root.parent
-    
-    # 简化版注入：直接通过 sys.path 优先级让 Python 自己去加载 overlay 里的文件
+
     injection_code = f"""
 import sys, os
 from pathlib import Path
 
-# 🟢 终极路径优先级：强制让 overlay/models 文件夹排在最前面
 sys.path.insert(0, r'{repo_root}')
 sys.path.insert(0, r'{overlay_root}')
 
@@ -70,7 +68,7 @@ def main():
     if not overlay.exists():
         raise RuntimeError(
             f"Overlay directory not found: {overlay}\n"
-            "请先运行原始 ablation 脚本生成 overlay。"
+            "Please generate the overlay before running ablation experiments."
         )
 
     def run_one(tag: str, enabled_ops=None, pool_mode="dmor"):
@@ -79,8 +77,7 @@ def main():
         ckpt_dir = out_dir / "ckpt"
         pred_dir = out_dir / "test_png"
         eval_dir = out_dir / "eval_official_gpu"
-        
-        # 🟢 修复 1：明确指定 checkpoint 的完整路径
+
         ckpt_path = ckpt_dir / args.ckpt_name
 
         ckpt_dir.mkdir(parents=True, exist_ok=True)
@@ -110,13 +107,12 @@ def main():
             "--backbone", "lite",
             "--amp",
         ]
-        
+
         if enabled_ops is not None:
             train_args.append("--enabled_ops")
             train_args.extend([str(op) for op in enabled_ops])
         train_args.extend(["--pool_mode", pool_mode])
-        
-        # 🟢 修复 2：实际构建命令并拉起训练进程
+
         train_script = overlay / "scripts" / "bsds_train.py"
         train_cmd = build_launch_command(train_script, overlay, train_args)
         print(f"[{tag}] Starting Training...")
@@ -138,11 +134,9 @@ def main():
             export_args.extend([str(op) for op in enabled_ops])
         export_args.extend(["--pool_mode", pool_mode])
 
-        # 🟢 修复：透传 --mst 参数，确保公平对比
         if args.mst:
             export_args.append("--mst")
 
-        # 🟢 修复 3：实际构建命令并拉起导出进程
         export_script = overlay / "scripts" / "bsds_export.py"
         export_cmd = build_launch_command(export_script, overlay, export_args)
         print(f"[{tag}] Starting Export...")
@@ -167,7 +161,7 @@ def main():
         #("B3_noO3", [0,1,3,4], "dmor"),
         #("B4_noO4", [0,1,2,4], "dmor"),
         #("B5_noO5", [0,1,2,3], "dmor"),
-        ("B6_all3x3", None, "all3x3"),  # <-- 注释掉，保留战果
+        ("B6_all3x3", None, "all3x3"),
     ]
 
     for name, enabled, mode in experiments:
@@ -177,7 +171,7 @@ def main():
             pool_mode=mode
         )
 
-    print("\n✔ All ablations finished (overlay enforced).")
+    print("\nAll ablations finished (overlay enforced).")
 
 if __name__ == "__main__":
     main()
