@@ -16,7 +16,8 @@ Thumbs.db
 *.log
 runs/
 
-# Outputs & large files
+# Data, outputs & large files
+dataset/
 outputs/
 *.pdf
 result/*.pth
